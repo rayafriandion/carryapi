@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 )
 
@@ -45,5 +47,27 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 	if err := Migrate(d); err != nil {
 		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+func TestForeignKeyEnforcedAcrossPool(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_fk.db")
+	d, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+	d.SetMaxOpenConns(4)
+	if err := Migrate(d); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		// api_keys.user_id REFERENCES users(id); user_id 9999 does not exist
+		_, err := d.ExecContext(ctx, `INSERT INTO api_keys(user_id, key_hash, key_prefix, status) VALUES (9999, 'h', 'p', 'active')`)
+		if err == nil {
+			t.Fatalf("iteration %d: FK violation was allowed (foreign_keys not enforced on pooled connection)", i)
+		}
 	}
 }

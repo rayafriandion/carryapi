@@ -116,10 +116,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     ip          TEXT,
     user_agent  TEXT
 );
-CREATE TABLE IF NOT EXISTS schema_version (
-    version     INTEGER PRIMARY KEY,
-    applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 `},
 }
 

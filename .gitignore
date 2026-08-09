@@ -1,6 +1,9 @@
 carryapi.db
 carryapi.db-*
 carryapi.key
+carryapi
 carryapi.exe
+carryapi-linux-amd64
+carryapi-windows-amd64.exe
 node_modules/
 web/node_modules/

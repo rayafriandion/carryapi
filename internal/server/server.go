@@ -26,6 +26,11 @@ func New(cfg config.Config, db *sql.DB, store *settings.Store) *Server {
 	s.httpServer = &http.Server{
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout intentionally unset: this server proxies streaming
+		// (SSE) LLM responses that require unbounded write time. Setting
+		// WriteTimeout would break long streaming completions. Do not add
+		// one without a per-handler write deadline strategy.
 	}
 	return s
 }

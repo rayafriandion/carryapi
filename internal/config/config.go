@@ -44,7 +44,10 @@ func loadMasterKey() ([]byte, error) {
 		}
 		return []byte(v), nil
 	}
-	const keyFile = "carryapi.key"
+	keyFile := os.Getenv("CARRYAPI_KEY_FILE")
+	if keyFile == "" {
+		keyFile = "carryapi.key"
+	}
 	if data, err := os.ReadFile(keyFile); err == nil {
 		if len(data) != 32 {
 			return nil, fmt.Errorf("%s must be 32 bytes", keyFile)

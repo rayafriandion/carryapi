@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,13 +27,11 @@ func TestLoadFromEnv(t *testing.T) {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	os.Unsetenv("CARRYAPI_PORT")
-	os.Unsetenv("CARRYAPI_DB_PATH")
-	os.Unsetenv("CARRYAPI_MASTER_KEY")
-	dir := t.TempDir()
-	old, _ := os.Getwd()
-	defer os.Chdir(old)
-	os.Chdir(dir)
+	t.Setenv("CARRYAPI_PORT", "")
+	t.Setenv("CARRYAPI_DB_PATH", "")
+	t.Setenv("CARRYAPI_MASTER_KEY", "")
+	keyFile := filepath.Join(t.TempDir(), "carryapi.key")
+	t.Setenv("CARRYAPI_KEY_FILE", keyFile)
 
 	cfg, err := Load()
 	if err != nil {
@@ -48,7 +47,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Errorf("generated MasterKey len = %d, want 32", len(cfg.MasterKey))
 	}
 	// carryapi.key 应已生成
-	if _, err := os.Stat(filepath.Join(dir, "carryapi.key")); err != nil {
+	if _, err := os.Stat(keyFile); err != nil {
 		t.Errorf("carryapi.key not created: %v", err)
 	}
 }
@@ -58,5 +57,22 @@ func TestMasterKeyInvalidLength(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Error("expected error for short master key, got nil")
+	}
+}
+
+func TestLoadFromEnvKeyFile(t *testing.T) {
+	t.Setenv("CARRYAPI_MASTER_KEY", "")
+	keyFile := filepath.Join(t.TempDir(), "existing.key")
+	if err := os.WriteFile(keyFile, bytes.Repeat([]byte{7}, 32), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("CARRYAPI_KEY_FILE", keyFile)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !bytes.Equal(cfg.MasterKey, bytes.Repeat([]byte{7}, 32)) {
+		t.Errorf("MasterKey = %v, want 32 bytes of 7", cfg.MasterKey)
 	}
 }

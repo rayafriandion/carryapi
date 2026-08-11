@@ -40,10 +40,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, requires2FA, err := h.ls.Login(req.Email, req.Password)
 	if err != nil {
-		if errors.Is(err, auth.ErrUserDisabled) {
-			JSONError(w, 403, "user disabled")
-			return
-		}
+		// 统一 401 + 同一错误信息,避免枚举账户是否被禁用/存在
 		JSONError(w, 401, "invalid credentials")
 		return
 	}

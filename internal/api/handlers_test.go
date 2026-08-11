@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,22 @@ func TestLoginWrongPassword(t *testing.T) {
 	rec := serve(f.auth.Login, "POST", "/api/auth/login", body)
 	if rec.Code != 401 {
 		t.Errorf("code=%d, want 401", rec.Code)
+	}
+}
+
+func TestLoginDisabledUserReturns401(t *testing.T) {
+	f := setupAPI(t)
+	hash, _ := auth.HashPassword("pw123")
+	u, _ := f.users.Create("disabled@x.com", hash, "user")
+	f.users.UpdateStatus(u.ID, "disabled")
+	body, _ := json.Marshal(map[string]string{"email": "disabled@x.com", "password": "pw123"})
+	rec := serve(f.auth.Login, "POST", "/api/auth/login", body)
+	// 与无效凭据/不存在的账户一致:401 + 同一 body,不枚举账户状态
+	if rec.Code != 401 {
+		t.Errorf("code=%d, want 401 (no 403 enumeration)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid credentials") {
+		t.Errorf("body = %q, want unified 'invalid credentials'", rec.Body.String())
 	}
 }
 

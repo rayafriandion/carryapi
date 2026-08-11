@@ -13,7 +13,7 @@ func TestRequestJSONRoundTrip(t *testing.T) {
 			{Role: "user", Content: []ContentPart{{Type: "text", Text: "hi"}}},
 			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Name: "get_weather", Arguments: `{"city":"beijing"}`}}},
 		},
-		System: []ContentPart{{Type: "text", Text: "be helpful"}},
+		System: []ContentPart{{Type: "text", Text: "be helpful", CacheControl: &CacheControl{Type: "ephemeral"}}},
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -31,6 +31,9 @@ func TestRequestJSONRoundTrip(t *testing.T) {
 	}
 	if len(back.System) != 1 || back.System[0].Text != "be helpful" {
 		t.Errorf("system round trip mismatch: %+v", back.System)
+	}
+	if back.System[0].CacheControl == nil || back.System[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("system cache_control round trip mismatch: %+v", back.System[0].CacheControl)
 	}
 }
 

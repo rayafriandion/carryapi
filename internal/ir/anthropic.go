@@ -111,7 +111,11 @@ func decodeAnthropicSystem(raw json.RawMessage) ([]ContentPart, error) {
 	var parts []ContentPart
 	for _, b := range blocks {
 		if b.Type == "text" {
-			parts = append(parts, ContentPart{Type: "text", Text: b.Text})
+			part := ContentPart{Type: "text", Text: b.Text}
+			if b.CacheControl != nil {
+				part.CacheControl = &CacheControl{Type: b.CacheControl.Type}
+			}
+			parts = append(parts, part)
 		}
 	}
 	return parts, nil
@@ -134,7 +138,11 @@ func decodeAnthropicMessage(m anthropicMessageRaw) (Message, error) {
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
-			msg.Content = append(msg.Content, ContentPart{Type: "text", Text: b.Text})
+			part := ContentPart{Type: "text", Text: b.Text}
+			if b.CacheControl != nil {
+				part.CacheControl = &CacheControl{Type: b.CacheControl.Type}
+			}
+			msg.Content = append(msg.Content, part)
 		case "tool_use":
 			args := string(b.Input)
 			if len(b.Input) > 0 && string(b.Input) != "null" {
@@ -200,7 +208,7 @@ func EncodeAnthropicRequest(r *Request) ([]byte, error) {
 			var blocks []any
 			for _, p := range m.Content {
 				if p.Type == "text" {
-					blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
+					blocks = append(blocks, anthropicTextBlock(p))
 				}
 			}
 			for _, tc := range m.ToolCalls {
@@ -300,14 +308,24 @@ func encodeAnthropicToolResultBlock(p ContentPart) map[string]any {
 	return tr
 }
 
+// anthropicTextBlock 编码 text ContentPart 为 Anthropic 文本块;
+// 带 CacheControl 时附上 cache_control(prompt-cache 写计费依赖)。
+func anthropicTextBlock(p ContentPart) map[string]any {
+	block := map[string]any{"type": "text", "text": p.Text}
+	if p.CacheControl != nil {
+		block["cache_control"] = map[string]string{"type": p.CacheControl.Type}
+	}
+	return block
+}
+
 func encodeAnthropicSystem(parts []ContentPart) any {
-	if len(parts) == 1 && parts[0].Type == "text" {
+	if len(parts) == 1 && parts[0].Type == "text" && parts[0].CacheControl == nil {
 		return parts[0].Text
 	}
 	var blocks []any
 	for _, p := range parts {
 		if p.Type == "text" {
-			blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
+			blocks = append(blocks, anthropicTextBlock(p))
 		}
 	}
 	return blocks
@@ -317,7 +335,7 @@ func encodeAnthropicContent(parts []ContentPart) any {
 	var blocks []any
 	for _, p := range parts {
 		if p.Type == "text" {
-			blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
+			blocks = append(blocks, anthropicTextBlock(p))
 		}
 	}
 	return blocks

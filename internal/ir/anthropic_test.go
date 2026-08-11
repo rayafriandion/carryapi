@@ -162,6 +162,98 @@ func TestAnthropicStreamEncoderToolBlockStart(t *testing.T) {
 	}
 }
 
+func TestAnthropicCacheControlRoundTrip(t *testing.T) {
+	// I3 回归:system + 消息文本块的 cache_control 在解码/编码间往返保留。
+	body := []byte(`{
+		"model": "claude-3-5-sonnet-20241022",
+		"system": [
+			{"type": "text", "text": "cache me", "cache_control": {"type": "ephemeral"}},
+			{"type": "text", "text": "plain"}
+		],
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+		],
+		"max_tokens": 50
+	}`)
+	r, err := DecodeAnthropicRequest(body)
+	if err != nil {
+		t.Fatalf("DecodeAnthropicRequest: %v", err)
+	}
+	if len(r.System) != 2 {
+		t.Fatalf("system parts = %+v", r.System)
+	}
+	if r.System[0].CacheControl == nil || r.System[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("system[0] cache_control not decoded: %+v", r.System[0])
+	}
+	if r.System[1].CacheControl != nil {
+		t.Errorf("system[1] should have no cache_control: %+v", r.System[1])
+	}
+	if r.Messages[0].Content[0].CacheControl == nil || r.Messages[0].Content[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("message text cache_control not decoded: %+v", r.Messages[0].Content[0])
+	}
+	// 编码:system 必须是 blocks 形式且带 cache_control;消息文本块同样带
+	out, err := EncodeAnthropicRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeAnthropicRequest: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	sys := m["system"].([]any)
+	if len(sys) != 2 {
+		t.Fatalf("encoded system = %+v", sys)
+	}
+	b0 := sys[0].(map[string]any)
+	cc0, ok := b0["cache_control"].(map[string]any)
+	if !ok || cc0["type"] != "ephemeral" {
+		t.Errorf("encoded system[0] cache_control = %+v", b0["cache_control"])
+	}
+	if b1 := sys[1].(map[string]any); b1["cache_control"] != nil {
+		t.Errorf("encoded system[1] should have no cache_control: %+v", b1)
+	}
+	msg0 := m["messages"].([]any)[0].(map[string]any)
+	block := msg0["content"].([]any)[0].(map[string]any)
+	if block["cache_control"] == nil {
+		t.Errorf("encoded message text block missing cache_control: %+v", block)
+	}
+	// 重新解码,再次断言保留
+	back, err := DecodeAnthropicRequest(out)
+	if err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if back.System[0].CacheControl == nil || back.System[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("round-trip system cache_control lost: %+v", back.System[0])
+	}
+	if back.Messages[0].Content[0].CacheControl == nil || back.Messages[0].Content[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("round-trip message cache_control lost: %+v", back.Messages[0].Content[0])
+	}
+}
+
+func TestAnthropicSystemCacheControlSingleText(t *testing.T) {
+	// I3 回归:单条 system 文本带 cache_control 时不能退化为 string 形式(会丢 cache_control)。
+	r := &Request{
+		Model:  "claude-3-5-sonnet-20241022",
+		System: []ContentPart{{Type: "text", Text: "cache me", CacheControl: &CacheControl{Type: "ephemeral"}}},
+		Messages: []Message{
+			{Role: "user", Content: []ContentPart{{Type: "text", Text: "hi"}}},
+		},
+		MaxTokens: intPtr(50),
+	}
+	out, err := EncodeAnthropicRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeAnthropicRequest: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	sys, ok := m["system"].([]any)
+	if !ok || len(sys) != 1 {
+		t.Fatalf("system should be blocks form, got %v", m["system"])
+	}
+	b := sys[0].(map[string]any)
+	if b["cache_control"] == nil {
+		t.Errorf("single text system cache_control dropped: %+v", b)
+	}
+}
+
 func TestDecodeAnthropicRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "claude-3-5-sonnet-20241022",

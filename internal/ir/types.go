@@ -37,6 +37,8 @@ type ContentPart struct {
 	// tool_result
 	ToolResultContent []ContentPart // 工具返回(可嵌套 text/image)
 	IsError           bool
+	// Anthropic prompt-cache 提示(仅 Anthropic 支持;其余协议边界丢失,IR 内保留)。
+	CacheControl *CacheControl
 }
 
 // Tool 是统一工具定义。

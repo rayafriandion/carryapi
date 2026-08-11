@@ -101,11 +101,17 @@ func QuerySummary(db *sql.DB, p QueryParams) (*Summary, error) {
 	}
 
 	// ByProvider(provider_id 非空才分组)
+	providerClause := `WHERE rl.created_at >= ? AND rl.created_at <= ?
+		AND rl.provider_id IS NOT NULL` + userClause(p)
+	providerArgs := append([]any{p.Start, p.End}, userArgs(p)...)
+	if p.Model != "" {
+		providerClause += " AND rl.custom_model = ?"
+		providerArgs = append(providerArgs, p.Model)
+	}
 	rows, err = db.Query(`SELECT rl.provider_id, COALESCE(up.name, 'unknown'), COUNT(*), COALESCE(SUM(rl.cost),0)
 		FROM request_logs rl LEFT JOIN upstream_providers up ON rl.provider_id = up.id
-		WHERE rl.created_at >= ? AND rl.created_at <= ?
-		AND rl.provider_id IS NOT NULL`+userClause(p)+` GROUP BY rl.provider_id ORDER BY COUNT(*) DESC`,
-		append([]any{p.Start, p.End}, userArgs(p)...)...)
+		`+providerClause+` GROUP BY rl.provider_id ORDER BY COUNT(*) DESC`,
+		providerArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("summary by provider: %w", err)
 	}
@@ -119,11 +125,17 @@ func QuerySummary(db *sql.DB, p QueryParams) (*Summary, error) {
 	}
 
 	// ByKey
+	keyClause := `WHERE rl.created_at >= ? AND rl.created_at <= ?
+		AND rl.api_key_id IS NOT NULL` + userClause(p)
+	keyArgs := append([]any{p.Start, p.End}, userArgs(p)...)
+	if p.Model != "" {
+		keyClause += " AND rl.custom_model = ?"
+		keyArgs = append(keyArgs, p.Model)
+	}
 	rows, err = db.Query(`SELECT rl.api_key_id, ak.key_prefix, COALESCE(ak.label, ''), COUNT(*), COALESCE(SUM(rl.cost),0)
 		FROM request_logs rl LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
-		WHERE rl.created_at >= ? AND rl.created_at <= ?
-		AND rl.api_key_id IS NOT NULL`+userClause(p)+` GROUP BY rl.api_key_id ORDER BY COUNT(*) DESC`,
-		append([]any{p.Start, p.End}, userArgs(p)...)...)
+		`+keyClause+` GROUP BY rl.api_key_id ORDER BY COUNT(*) DESC`,
+		keyArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("summary by key: %w", err)
 	}

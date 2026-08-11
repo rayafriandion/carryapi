@@ -120,6 +120,29 @@ func TestQuerySummaryUserFilter(t *testing.T) {
 	}
 }
 
+// TestQuerySummaryModelFilterApplied 验证 Model 过滤同时作用于 ByProvider/ByKey。
+func TestQuerySummaryModelFilterApplied(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	s, err := QuerySummary(d, QueryParams{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(), Model: "my-gpt4",
+	})
+	if err != nil {
+		t.Fatalf("QuerySummary: %v", err)
+	}
+	if s.TotalRequests != 3 {
+		t.Errorf("TotalRequests = %d, want 3 (my-gpt4 only)", s.TotalRequests)
+	}
+	// ByProvider 只应含 provider 1(3 行),不含 provider 2
+	if len(s.ByProvider) != 1 || s.ByProvider[0].Requests != 3 {
+		t.Errorf("ByProvider = %+v, want single provider with 3 requests", s.ByProvider)
+	}
+	// ByKey 只应含 key 1(2 行)与 key 3(1 行),不含 key 2
+	if len(s.ByKey) != 2 {
+		t.Errorf("ByKey = %+v, want 2 keys (1 and 3)", s.ByKey)
+	}
+}
+
 func TestQueryTrendDay(t *testing.T) {
 	d := newDB(t)
 	seedLogs(t, d)

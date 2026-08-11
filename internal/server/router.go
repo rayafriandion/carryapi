@@ -23,7 +23,7 @@ func (s *Server) buildRouter() http.Handler {
 			r.Use(middleware.SessionMiddleware(deps.Sessions, deps.Users))
 			r.With(middleware.RateLimit(10, time.Minute)).Post("/login", deps.Auth.Login)
 			r.With(middleware.RateLimit(10, time.Minute)).Post("/register", deps.Auth.Register)
-			r.Post("/2fa/complete", deps.Auth.Complete2FA)
+			r.With(middleware.RateLimit(10, time.Minute)).Post("/2fa/complete", deps.Auth.Complete2FA)
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireLogin())
 				r.Use(middleware.CSRFMiddleware())

@@ -68,7 +68,8 @@ func (h *Handler) params(r *http.Request) (QueryParams, error) {
 }
 
 func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
-	now := time.Now()
+	// SQLite 用 CURRENT_TIMESTAMP 存 UTC;默认范围必须基于 UTC 才不会漏掉近期数据。
+	now := time.Now().UTC()
 	start := now.Add(-30 * 24 * time.Hour)
 	end := now
 	if v := r.URL.Query().Get("start"); v != "" {
@@ -76,14 +77,14 @@ func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 		if err != nil {
 			return time.Time{}, time.Time{}, fmt.Errorf("invalid start (RFC3339): %v", err)
 		}
-		start = t
+		start = t.UTC()
 	}
 	if v := r.URL.Query().Get("end"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			return time.Time{}, time.Time{}, fmt.Errorf("invalid end (RFC3339): %v", err)
 		}
-		end = t
+		end = t.UTC()
 	}
 	return start, end, nil
 }

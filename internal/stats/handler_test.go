@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"carryapi/internal/middleware"
 	"carryapi/internal/user"
@@ -127,5 +128,43 @@ func TestHandlerRequiresLogin(t *testing.T) {
 	h.Summary(rec, req)
 	if rec.Code != 401 {
 		t.Errorf("code=%d, want 401", rec.Code)
+	}
+}
+
+// TestParseTimeRangeDefaultsUTC 验证默认时间范围基于 UTC(修复本地时区漏数据)。
+func TestParseTimeRangeDefaultsUTC(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/stats/summary", nil)
+	start, end, err := parseTimeRange(r)
+	if err != nil {
+		t.Fatalf("parseTimeRange: %v", err)
+	}
+	if _, offset := start.Zone(); offset != 0 {
+		t.Errorf("default start zone offset = %d, want 0 (UTC)", offset)
+	}
+	if _, offset := end.Zone(); offset != 0 {
+		t.Errorf("default end zone offset = %d, want 0 (UTC)", offset)
+	}
+	// start 应为 30 天前
+	if time.Since(start) < 29*24*time.Hour || time.Since(start) > 31*24*time.Hour {
+		t.Errorf("start = %v, not ~30 days ago", start)
+	}
+}
+
+// TestHandlerSummaryLocalTimezoneRange 用默认范围应覆盖 UTC 存储的数据(无论服务器时区)。
+func TestHandlerSummaryLocalTimezoneRange(t *testing.T) {
+	h, _ := newHandler(t)
+	req := httptest.NewRequest("GET", "/api/stats/summary", nil)
+	req = req.WithContext(ctxUser(1, "admin"))
+	rec := httptest.NewRecorder()
+	h.Summary(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var s Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if s.TotalRequests != 4 {
+		t.Errorf("TotalRequests = %d, want 4 (default range must cover UTC-stored data regardless of server tz)", s.TotalRequests)
 	}
 }

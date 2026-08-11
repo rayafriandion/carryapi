@@ -188,7 +188,11 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	f := LogFilter{Start: start, End: end}
 	if u.Role == "admin" {
 		if v := r.URL.Query().Get("user_id"); v != "" {
-			id, _ := strconv.ParseInt(v, 10, 64)
+			id, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				writeErr(w, 400, "invalid user_id")
+				return
+			}
 			f.UserID = &id
 		}
 	} else {

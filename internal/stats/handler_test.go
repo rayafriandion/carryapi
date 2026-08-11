@@ -180,3 +180,15 @@ func TestHandlerSummaryBadStartParam(t *testing.T) {
 		t.Errorf("code=%d, want 400 (bad param, not 401)", rec.Code)
 	}
 }
+
+// TestHandlerLogsInvalidUserID admin 传非法 user_id 应返回 400。
+func TestHandlerLogsInvalidUserID(t *testing.T) {
+	h, _ := newHandler(t)
+	req := httptest.NewRequest("GET", "/api/logs?user_id=abc", nil)
+	req = req.WithContext(ctxUser(1, "admin"))
+	rec := httptest.NewRecorder()
+	h.Logs(rec, req)
+	if rec.Code != 400 {
+		t.Errorf("code=%d, want 400 (invalid user_id)", rec.Code)
+	}
+}

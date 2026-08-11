@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -30,6 +31,13 @@ func NewProxy(deps Deps) *Proxy {
 		deps.Client = &http.Client{}
 	}
 	return &Proxy{deps: deps}
+}
+
+// writeJSON 写 JSON 响应(catalog 包的 jsonOut 是 handler 私有,不可见,故在 proxy 包内定义)。
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
 }
 
 // requestContext 承载一次代理请求的解析结果,贯穿转发与统计。
@@ -62,8 +70,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleProxy(w, r, "responses")
 	case "/v1/messages":
 		p.handleProxy(w, r, "anthropic")
-	// 注意:/v1/models 由 Task 7 的 handleModels 处理,在此任务中不注册,
-	// 未匹配路径直接落到默认 404。
+	case "/v1/models":
+		p.handleModels(w, r)
 	default:
 		body := ir.OpenAIErrorBody(ir.NewError("not_found", "invalid_request_url", "invalid request url", 404))
 		w.Header().Set("Content-Type", "application/json")

@@ -109,6 +109,13 @@ func (s *Server) buildRouter() http.Handler {
 		})
 	}
 
+	// 代理端点(在 SessionMiddleware 之外,用 API Key 鉴权)
+	// chi 的 /v1/* 通配匹配多级路径(/v1/models、/v1/chat/completions 等),
+	// 全部交给 Proxy.ServeHTTP 按 Path 内部分派。
+	if deps.Proxy != nil {
+		r.Handle("/v1/*", deps.Proxy)
+	}
+
 	// 前端静态资源(SPA)
 	r.Handle("/*", web.Handler())
 	s.router = r

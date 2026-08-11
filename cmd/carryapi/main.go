@@ -19,6 +19,7 @@ import (
 	"carryapi/internal/config"
 	"carryapi/internal/crypto"
 	"carryapi/internal/db"
+	"carryapi/internal/proxy"
 	"carryapi/internal/server"
 	"carryapi/internal/settings"
 	"carryapi/internal/user"
@@ -78,6 +79,12 @@ func main() {
 	// 首次启动:若无 admin 则创建
 	bootstrapAdmin(d, us)
 
+	// 上游代理(catalog 的 store 直接注入)
+	proxyInstance := proxy.NewProxy(proxy.Deps{
+		DB: d, Keys: ks, Users: us,
+		Models: catModel, Providers: catProv, Prices: catPrice,
+	})
+
 	srv := server.New(cfg, server.Deps{
 		DB:       d,
 		Store:    st,
@@ -91,6 +98,7 @@ func main() {
 		OAuth:    oauthH,
 		Passkey:  passkeyH,
 		Catalog:  catalogH,
+		Proxy:    proxyInstance,
 	})
 
 	// 信号处理

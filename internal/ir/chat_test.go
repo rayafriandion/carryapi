@@ -202,19 +202,31 @@ func TestChatStreamDecoder(t *testing.T) {
 	if len(evs) != 1 || evs[0].Type != EventToolCallDelta {
 		t.Fatalf("tool delta: %+v", evs)
 	}
-	// finish + usage
+	// finish + usage -> 恰好 2 个事件:EventUsage(独立)+ EventDone(不内嵌用量)
 	evs, _ = d.DecodeLine([]byte(`{"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`))
-	hasDone, hasUsage := false, false
-	for _, ev := range evs {
-		if ev.Type == EventDone && ev.Finish == "stop" {
-			hasDone = true
-		}
-		if ev.Type == EventUsage && ev.Usage != nil && ev.Usage.TotalTokens == 3 {
-			hasUsage = true
-		}
+	if len(evs) != 2 {
+		t.Fatalf("finish+usage should emit exactly 2 events, got %d: %+v", len(evs), evs)
 	}
-	if !hasDone || !hasUsage {
-		t.Errorf("finish+usage events: %+v", evs)
+	if evs[0].Type != EventUsage || evs[0].Usage == nil || evs[0].Usage.TotalTokens != 3 {
+		t.Errorf("first event should be EventUsage with total=3: %+v", evs[0])
+	}
+	if evs[1].Type != EventDone || evs[1].Finish != "stop" {
+		t.Errorf("second event should be EventDone stop: %+v", evs[1])
+	}
+	if evs[1].Usage != nil {
+		t.Errorf("EventDone must not embed usage (duplicate): %+v", evs[1])
+	}
+}
+
+func TestChatStreamDecoderStandaloneUsage(t *testing.T) {
+	d := &ChatStreamDecoder{}
+	// 无 finish_reason 的独立 usage chunk -> 仅 EventUsage
+	evs, err := d.DecodeLine([]byte(`{"id":"x","choices":[{"index":0,"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":4,"completion_tokens":5,"total_tokens":9}}`))
+	if err != nil {
+		t.Fatalf("DecodeLine: %v", err)
+	}
+	if len(evs) != 1 || evs[0].Type != EventUsage || evs[0].Usage == nil || evs[0].Usage.TotalTokens != 9 {
+		t.Errorf("standalone usage events = %+v", evs)
 	}
 }
 
@@ -238,5 +250,37 @@ func TestChatStreamEncoder(t *testing.T) {
 	}
 	if string(lines[1]) != "data: [DONE]\n\n" {
 		t.Errorf("done line = %q", lines[1])
+	}
+}
+
+func TestChatStreamEncoderPendingUsageOnDone(t *testing.T) {
+	// C2 回归:EventUsage 缓冲,EventDone 的 finish chunk 内嵌缓冲的 total_tokens。
+	e := &ChatStreamEncoder{}
+	// 独立 EventUsage 不产出任何行
+	lines, err := e.Encode(Event{Type: EventUsage, Usage: &Usage{InputTokens: 10, OutputTokens: 20, TotalTokens: 30}})
+	if err != nil {
+		t.Fatalf("encode usage: %v", err)
+	}
+	if len(lines) != 0 {
+		t.Fatalf("standalone EventUsage should emit nothing, got %d lines", len(lines))
+	}
+	lines, err = e.Encode(Event{Type: EventDone, Finish: "stop"})
+	if err != nil {
+		t.Fatalf("encode done: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("done should produce 2 lines, got %d", len(lines))
+	}
+	if !bytes.Contains(lines[0], []byte(`"finish_reason":"stop"`)) || !bytes.Contains(lines[0], []byte(`"total_tokens":30`)) {
+		t.Errorf("finish chunk should carry buffered usage: %s", lines[0])
+	}
+	if string(lines[1]) != "data: [DONE]\n\n" {
+		t.Errorf("done line = %q", lines[1])
+	}
+	// Reset 清空 pendingUsage
+	e.Reset()
+	lines, _ = e.Encode(Event{Type: EventDone, Finish: "stop"})
+	if bytes.Contains(lines[0], []byte(`"total_tokens"`)) {
+		t.Errorf("Reset should clear pendingUsage: %s", lines[0])
 	}
 }

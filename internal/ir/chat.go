@@ -447,6 +447,7 @@ func (d *ChatStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
 		return nil, fmt.Errorf("decode chat chunk: %w", err)
 	}
 	var evs []Event
+	finished := false
 	for _, c := range chunk.Choices {
 		if c.Delta.Content != "" {
 			evs = append(evs, Event{Type: EventContentDelta, Delta: c.Delta.Content})
@@ -457,31 +458,33 @@ func (d *ChatStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
 			}})
 		}
 		if c.FinishReason != nil {
-			fin := *c.FinishReason
-			ev := Event{Type: EventDone, Finish: fin}
+			finished = true
+			// 用量先于 done 发出(与 Responses/Anthropic 解码器一致),Done 不内嵌用量,避免重复。
 			if chunk.Usage != nil {
-				ev.Usage = &Usage{
-					InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens,
-					TotalTokens: chunk.Usage.TotalTokens, CacheReadTokens: chunk.Usage.PromptDetails.CachedTokens,
-				}
+				evs = append(evs, Event{Type: EventUsage, Usage: chatUsageToIR(chunk.Usage)})
 			}
-			evs = append(evs, ev)
+			evs = append(evs, Event{Type: EventDone, Finish: *c.FinishReason})
 		}
 	}
-	if chunk.Usage != nil {
-		// 无 finish_reason 的独立 usage chunk(极少见)
-		evs = append(evs, Event{Type: EventUsage, Usage: &Usage{
-			InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens,
-			TotalTokens: chunk.Usage.TotalTokens, CacheReadTokens: chunk.Usage.PromptDetails.CachedTokens,
-		}})
+	// 无 finish_reason 的独立 usage chunk(极少见)
+	if !finished && chunk.Usage != nil {
+		evs = append(evs, Event{Type: EventUsage, Usage: chatUsageToIR(chunk.Usage)})
 	}
 	return evs, nil
+}
+
+func chatUsageToIR(u *chatUsageRaw) *Usage {
+	return &Usage{
+		InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens,
+		TotalTokens: u.TotalTokens, CacheReadTokens: u.PromptDetails.CachedTokens,
+	}
 }
 
 // ---- 流式:[]Event -> 上游 Chat SSE 行 ----
 
 type ChatStreamEncoder struct {
 	toolCallIndex int
+	pendingUsage  *Usage
 }
 
 func (e *ChatStreamEncoder) Encode(ev Event) ([][]byte, error) {
@@ -515,13 +518,16 @@ func (e *ChatStreamEncoder) Encode(ev Event) ([][]byte, error) {
 		}
 		return [][]byte{EncodeSSELine(mustJSON(chunk))}, nil
 	case EventUsage:
-		// 独立 usage 行(无 finish)
-		chunk := map[string]any{
-			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}}},
-			"usage":   usageToChat(ev.Usage),
+		// 独立 usage 事件:暂存,并入随后的 EventDone(与 Responses/Anthropic 编码器一致)。
+		if ev.Usage != nil {
+			e.pendingUsage = ev.Usage
 		}
-		return [][]byte{EncodeSSELine(mustJSON(chunk))}, nil
+		return nil, nil
 	case EventDone:
+		usage := ev.Usage
+		if usage == nil {
+			usage = e.pendingUsage
+		}
 		chunk := map[string]any{
 			"choices": []map[string]any{{
 				"index":         0,
@@ -529,8 +535,8 @@ func (e *ChatStreamEncoder) Encode(ev Event) ([][]byte, error) {
 				"finish_reason": ev.Finish,
 			}},
 		}
-		if ev.Usage != nil {
-			chunk["usage"] = usageToChat(ev.Usage)
+		if usage != nil {
+			chunk["usage"] = usageToChat(usage)
 		}
 		return [][]byte{
 			EncodeSSELine(mustJSON(chunk)),
@@ -540,7 +546,10 @@ func (e *ChatStreamEncoder) Encode(ev Event) ([][]byte, error) {
 	return nil, fmt.Errorf("unknown event type %d", ev.Type)
 }
 
-func (e *ChatStreamEncoder) Reset() { e.toolCallIndex = 0 }
+func (e *ChatStreamEncoder) Reset() {
+	e.toolCallIndex = 0
+	e.pendingUsage = nil
+}
 
 func usageToChat(u *Usage) map[string]any {
 	if u == nil {

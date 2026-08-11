@@ -80,6 +80,32 @@ func (s *Store) Delete(id int64) error {
 	return err
 }
 
+// DeleteCascade removes a user and all FK-referencing child rows in a single
+// transaction. request_logs must be deleted before api_keys (request_logs
+// references api_keys(id)); then sessions/auth_methods/api_keys, then the user.
+func (s *Store) DeleteCascade(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin delete cascade: %w", err)
+	}
+	for _, stmt := range []string{
+		`DELETE FROM request_logs WHERE user_id=?`,
+		`DELETE FROM sessions WHERE user_id=?`,
+		`DELETE FROM auth_methods WHERE user_id=?`,
+		`DELETE FROM api_keys WHERE user_id=?`,
+		`DELETE FROM users WHERE id=?`,
+	} {
+		if _, err := tx.Exec(stmt, id); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("delete cascade: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete cascade: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) scanUser(row *sql.Row) (User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.CreatedAt)

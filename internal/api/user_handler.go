@@ -87,7 +87,7 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 400, "cannot delete yourself")
 		return
 	}
-	if err := h.users.Delete(id); err != nil {
+	if err := h.users.DeleteCascade(id); err != nil {
 		JSONError(w, 500, "delete failed")
 		return
 	}

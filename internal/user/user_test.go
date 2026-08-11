@@ -84,3 +84,42 @@ func TestDelete(t *testing.T) {
 		t.Error("expected error getting deleted user")
 	}
 }
+
+func TestDeleteCascade(t *testing.T) {
+	s := newStore(t)
+	u, _ := s.Create("cascade@x.com", "h", "user")
+	// 子行:auth_method + api_key + session
+	if err := s.AddAuthMethod(u.ID, "totp", "", []byte("secret")); err != nil {
+		t.Fatalf("AddAuthMethod: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO api_keys(user_id, key_hash, key_prefix, label, status) VALUES(?, 'hhh', 'carry-000001', 'k', 'active')`,
+		u.ID); err != nil {
+		t.Fatalf("insert api_key: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO sessions(user_id, token_hash, expires_at) VALUES(?, 'tokhash', datetime('now', '+1 hour'))`,
+		u.ID); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	if err := s.DeleteCascade(u.ID); err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if _, err := s.GetByID(u.ID); err == nil {
+		t.Error("expected error getting deleted user")
+	}
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM auth_methods WHERE user_id=?`, u.ID).Scan(&n)
+	if n != 0 {
+		t.Errorf("auth_methods left: %d", n)
+	}
+	s.db.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE user_id=?`, u.ID).Scan(&n)
+	if n != 0 {
+		t.Errorf("api_keys left: %d", n)
+	}
+	s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE user_id=?`, u.ID).Scan(&n)
+	if n != 0 {
+		t.Errorf("sessions left: %d", n)
+	}
+}

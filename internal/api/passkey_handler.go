@@ -140,10 +140,26 @@ func (h *PasskeyHandler) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wu := h.loadWebAuthnUser(&u)
-	_, err = h.svc.FinishLogin(wu, sessionKey, r)
+	cred, err := h.svc.FinishLogin(wu, sessionKey, r)
 	if err != nil {
 		JSONError(w, 401, "finish login failed: "+err.Error())
 		return
+	}
+	// 持久化更新后的 credential(含递增的 sign counter),否则 go-webauthn
+	// 无法在后续登录时做 replay/clone 检测。
+	if cred != nil {
+		providerUID := hex.EncodeToString(cred.ID)
+		methods, _ := h.users.GetAuthMethods(u.ID)
+		for _, m := range methods {
+			if m.Provider == "passkey" && m.ProviderUID == providerUID {
+				credJSON, _ := json.Marshal(cred)
+				if err := h.users.UpdateAuthMethodSecret(m.ID, u.ID, credJSON); err != nil {
+					JSONError(w, 500, "failed to persist credential")
+					return
+				}
+				break
+			}
+		}
 	}
 	sess, err := h.sessions.Create(u.ID, 7*24*time.Hour, "", "")
 	if err != nil {

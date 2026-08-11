@@ -71,6 +71,25 @@ func (s *Store) DeleteAuthMethod(id, userID int64) error {
 	return nil
 }
 
+// UpdateAuthMethodSecret updates the (encrypted) secret of an auth_method
+// owned by the given user. Used to persist the updated WebAuthn credential
+// (including the sign counter) after a successful passkey login.
+func (s *Store) UpdateAuthMethodSecret(id, userID int64, secret []byte) error {
+	enc, err := s.cipher.Encrypt(secret)
+	if err != nil {
+		return fmt.Errorf("encrypt auth method secret: %w", err)
+	}
+	res, err := s.db.Exec(`UPDATE auth_methods SET secret=? WHERE id=? AND user_id=?`, enc, id, userID)
+	if err != nil {
+		return fmt.Errorf("update auth method secret: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("auth method not found or not owned by user")
+	}
+	return nil
+}
+
 func (s *Store) scanAuthMethod(r rowScanner) (AuthMethod, error) {
 	var m AuthMethod
 	var enc []byte

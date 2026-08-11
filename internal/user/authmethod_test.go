@@ -72,3 +72,25 @@ func TestDeleteAuthMethodWrongUser(t *testing.T) {
 		t.Error("method should still exist")
 	}
 }
+
+func TestUpdateAuthMethodSecret(t *testing.T) {
+	s := newStore(t)
+	u, _ := s.Create("upd@x.com", "h", "user")
+	s.AddAuthMethod(u.ID, "passkey", "cred-uid-1", []byte("old-secret"))
+	methods, _ := s.GetAuthMethods(u.ID)
+	if len(methods) != 1 {
+		t.Fatal("expected 1 method")
+	}
+	// 更新 secret(含新的 sign counter)
+	if err := s.UpdateAuthMethodSecret(methods[0].ID, u.ID, []byte("new-secret-with-counter")); err != nil {
+		t.Fatalf("UpdateAuthMethodSecret: %v", err)
+	}
+	methods, _ = s.GetAuthMethods(u.ID)
+	if !bytes.Equal(methods[0].Secret, []byte("new-secret-with-counter")) {
+		t.Errorf("secret = %q, want updated value", methods[0].Secret)
+	}
+	// 其他用户不可改(防越权)
+	if err := s.UpdateAuthMethodSecret(methods[0].ID, 99999, []byte("x")); err == nil {
+		t.Error("expected error updating another user's auth method")
+	}
+}

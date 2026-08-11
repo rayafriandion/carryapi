@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -83,3 +84,109 @@ func TestEncodeResponsesRequestToolChoice(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func TestDecodeResponsesResponse(t *testing.T) {
+	body := []byte(`{
+		"id": "resp_1",
+		"model": "gpt-4o",
+		"output": [
+			{"type": "message", "id": "msg_1", "role": "assistant", "content": [{"type": "output_text", "text": "Weather is sunny.", "annotations": []}]},
+			{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"beijing\"}"}
+		],
+		"usage": {"input_tokens": 10, "output_tokens": 15, "total_tokens": 25, "input_tokens_details": {"cached_tokens": 4}}
+	}`)
+	r, err := DecodeResponsesResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponsesResponse: %v", err)
+	}
+	if r.ID != "resp_1" || r.Model != "gpt-4o" {
+		t.Errorf("id/model = %q/%q", r.ID, r.Model)
+	}
+	if len(r.Choices) != 1 {
+		t.Fatalf("choices = %d, want 1", len(r.Choices))
+	}
+	ch := r.Choices[0]
+	if len(ch.Content) != 1 || ch.Content[0].Text != "Weather is sunny." {
+		t.Errorf("content = %+v", ch.Content)
+	}
+	if len(ch.ToolCalls) != 1 || ch.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("tool calls = %+v", ch.ToolCalls)
+	}
+	if r.Usage.InputTokens != 10 || r.Usage.CacheReadTokens != 4 {
+		t.Errorf("usage = %+v", r.Usage)
+	}
+}
+
+func TestEncodeResponsesResponse(t *testing.T) {
+	r := &Response{
+		ID: "resp_1", Model: "gpt-4o",
+		Choices: []Choice{{
+			Role:      "assistant",
+			Content:   []ContentPart{{Type: "text", Text: "hi"}},
+			ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Name: "get_weather", Arguments: `{"city":"beijing"}`}},
+		}},
+		Usage: Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5},
+	}
+	out, err := EncodeResponsesResponse(r)
+	if err != nil {
+		t.Fatalf("EncodeResponsesResponse: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	output := m["output"].([]any)
+	if len(output) != 2 {
+		t.Fatalf("output = %d items, want 2", len(output))
+	}
+	fc := output[1].(map[string]any)
+	if fc["type"] != "function_call" || fc["name"] != "get_weather" {
+		t.Errorf("fc = %+v", fc)
+	}
+}
+
+func TestResponsesStreamDecoder(t *testing.T) {
+	d := &ResponsesStreamDecoder{}
+	// content delta
+	evs, _ := d.DecodeLine([]byte(`{"type":"response.output_text.delta","delta":"Hel"}`))
+	if len(evs) != 1 || evs[0].Type != EventContentDelta || evs[0].Delta != "Hel" {
+		t.Fatalf("content delta: %+v", evs)
+	}
+	// tool args delta
+	evs, _ = d.DecodeLine([]byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"ci"}`))
+	if len(evs) != 1 || evs[0].Type != EventToolCallDelta {
+		t.Fatalf("tool delta: %+v", evs)
+	}
+	// completed
+	evs, _ = d.DecodeLine([]byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-4o","status":"completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`))
+	hasDone, hasUsage := false, false
+	for _, ev := range evs {
+		if ev.Type == EventDone {
+			hasDone = true
+		}
+		if ev.Type == EventUsage && ev.Usage != nil && ev.Usage.TotalTokens == 3 {
+			hasUsage = true
+		}
+	}
+	if !hasDone || !hasUsage {
+		t.Errorf("completed events: %+v", evs)
+	}
+	// 未知事件忽略
+	evs, _ = d.DecodeLine([]byte(`{"type":"response.created"}`))
+	if len(evs) != 0 {
+		t.Errorf("created should be ignored, got %+v", evs)
+	}
+}
+
+func TestResponsesStreamEncoder(t *testing.T) {
+	e := &ResponsesStreamEncoder{}
+	lines, _ := e.Encode(Event{Type: EventContentDelta, Delta: "Hel"})
+	if len(lines) != 1 || !bytes.Contains(lines[0], []byte(`"delta":"Hel"`)) {
+		t.Errorf("delta line = %q", lines[0])
+	}
+	lines, _ = e.Encode(Event{Type: EventDone, Finish: "completed", Usage: &Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}})
+	if len(lines) != 1 {
+		t.Fatalf("done should produce 1 line, got %d", len(lines))
+	}
+	if !bytes.Contains(lines[0], []byte(`"response.completed"`)) || !bytes.Contains(lines[0], []byte(`"total_tokens":3`)) {
+		t.Errorf("completed line = %s", lines[0])
+	}
+}

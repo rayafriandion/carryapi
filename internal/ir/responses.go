@@ -267,3 +267,195 @@ func joinText(parts []ContentPart) string {
 	}
 	return s
 }
+
+// ---- 响应:上游 Responses JSON -> IR ----
+
+type responsesResponseRaw struct {
+	ID     string             `json:"id"`
+	Model  string             `json:"model"`
+	Status string             `json:"status"`
+	Output []responsesOutItem `json:"output"`
+	Usage  responsesUsageRaw  `json:"usage"`
+}
+
+type responsesOutItem struct {
+	Type      string          `json:"type"` // message / function_call
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	CallID    string          `json:"call_id"`
+	Name      string          `json:"name"`
+	Arguments string          `json:"arguments"`
+}
+
+type responsesUsageRaw struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	InputDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+func DecodeResponsesResponse(body []byte) (*Response, error) {
+	var raw responsesResponseRaw
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode responses response: %w", err)
+	}
+	r := &Response{ID: raw.ID, Model: raw.Model}
+	r.Usage = Usage{
+		InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens,
+		TotalTokens: raw.Usage.TotalTokens, CacheReadTokens: raw.Usage.InputDetails.CachedTokens,
+	}
+	for _, it := range raw.Output {
+		switch it.Type {
+		case "message":
+			content, err := decodeResponsesContent(it.Content)
+			if err != nil {
+				return nil, err
+			}
+			ch := Choice{Index: len(r.Choices), Role: "assistant", Content: content}
+			r.Choices = append(r.Choices, ch)
+		case "function_call":
+			tc := ToolCall{ID: it.CallID, Type: "function", Name: it.Name, Arguments: it.Arguments}
+			if len(r.Choices) > 0 {
+				r.Choices[len(r.Choices)-1].ToolCalls = append(r.Choices[len(r.Choices)-1].ToolCalls, tc)
+			} else {
+				r.Choices = append(r.Choices, Choice{Role: "assistant", ToolCalls: []ToolCall{tc}})
+			}
+		}
+	}
+	return r, nil
+}
+
+// ---- 响应:IR -> 下游 Responses JSON ----
+
+func EncodeResponsesResponse(r *Response) ([]byte, error) {
+	out := map[string]any{
+		"id":     r.ID,
+		"object": "response",
+		"model":  r.Model,
+		"status": "completed",
+	}
+	var output []any
+	for _, ch := range r.Choices {
+		if len(ch.Content) > 0 {
+			var content []map[string]any
+			for _, p := range ch.Content {
+				if p.Type == "text" {
+					content = append(content, map[string]any{"type": "output_text", "text": p.Text, "annotations": []any{}})
+				}
+			}
+			output = append(output, map[string]any{
+				"type": "message", "role": "assistant", "content": content,
+			})
+		}
+		for _, tc := range ch.ToolCalls {
+			output = append(output, map[string]any{
+				"type": "function_call", "id": "fc_" + tc.ID, "call_id": tc.ID,
+				"name": tc.Name, "arguments": tc.Arguments,
+			})
+		}
+	}
+	out["output"] = output
+	usage := map[string]any{
+		"input_tokens": r.Usage.InputTokens, "output_tokens": r.Usage.OutputTokens,
+		"total_tokens": r.Usage.TotalTokens,
+	}
+	if r.Usage.CacheReadTokens > 0 {
+		usage["input_tokens_details"] = map[string]int{"cached_tokens": r.Usage.CacheReadTokens}
+	}
+	out["usage"] = usage
+	return json.Marshal(out)
+}
+
+// ---- 流式:上游 Responses SSE data -> []Event ----
+
+type ResponsesStreamDecoder struct{}
+
+func (d *ResponsesStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
+	evType := SSEEventType(data)
+	switch evType {
+	case "response.output_text.delta":
+		var v struct {
+			Delta string `json:"delta"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("decode output_text.delta: %w", err)
+		}
+		return []Event{{Type: EventContentDelta, Delta: v.Delta}}, nil
+	case "response.function_call_arguments.delta":
+		var v struct {
+			Delta string `json:"delta"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("decode function_call_arguments.delta: %w", err)
+		}
+		return []Event{{Type: EventToolCallDelta, ToolCall: &ToolCall{Type: "function", Arguments: v.Delta}}}, nil
+	case "response.completed":
+		var v struct {
+			Response responsesResponseRaw `json:"response"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("decode response.completed: %w", err)
+		}
+		usage := &Usage{
+			InputTokens: v.Response.Usage.InputTokens, OutputTokens: v.Response.Usage.OutputTokens,
+			TotalTokens:     v.Response.Usage.TotalTokens,
+			CacheReadTokens: v.Response.Usage.InputDetails.CachedTokens,
+		}
+		return []Event{
+			{Type: EventUsage, Usage: usage},
+			{Type: EventDone, Finish: "stop"},
+		}, nil
+	default:
+		return nil, nil
+	}
+}
+
+// ---- 流式:[]Event -> 下游 Responses SSE 行 ----
+
+type ResponsesStreamEncoder struct {
+	toolItemID int
+}
+
+func (e *ResponsesStreamEncoder) Encode(ev Event) ([][]byte, error) {
+	switch ev.Type {
+	case EventContentDelta:
+		line := map[string]any{"type": "response.output_text.delta", "delta": ev.Delta}
+		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	case EventToolCallDelta:
+		if ev.ToolCall == nil {
+			return nil, fmt.Errorf("tool call delta without ToolCall")
+		}
+		e.toolItemID++
+		line := map[string]any{
+			"type":    "response.function_call_arguments.delta",
+			"item_id": fmt.Sprintf("fc_%d", e.toolItemID),
+			"delta":   ev.ToolCall.Arguments,
+		}
+		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	case EventDone:
+		line := map[string]any{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": "resp_stream", "object": "response", "model": "",
+				"status": "completed",
+				"output": []any{},
+				"usage":  usageToResponses(ev.Usage),
+			},
+		}
+		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	}
+	return nil, fmt.Errorf("unknown event type %d", ev.Type)
+}
+
+func (e *ResponsesStreamEncoder) Reset() { e.toolItemID = 0 }
+
+func usageToResponses(u *Usage) map[string]any {
+	if u == nil {
+		return map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+	}
+	return map[string]any{
+		"input_tokens": u.InputTokens, "output_tokens": u.OutputTokens, "total_tokens": u.TotalTokens,
+	}
+}

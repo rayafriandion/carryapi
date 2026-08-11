@@ -1,0 +1,11 @@
+{
+  "id": "resp_123",
+  "object": "response",
+  "model": "gpt-4o",
+  "status": "completed",
+  "output": [
+    {"type": "message", "id": "msg_1", "role": "assistant", "content": [{"type": "output_text", "text": "The weather in Beijing is sunny.", "annotations": []}]},
+    {"type": "function_call", "id": "fc_9", "call_id": "call_9", "name": "get_weather", "arguments": "{\"city\":\"beijing\"}"}
+  ],
+  "usage": {"input_tokens": 10, "output_tokens": 15, "total_tokens": 25, "input_tokens_details": {"cached_tokens": 4}}
+}

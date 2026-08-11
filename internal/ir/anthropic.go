@@ -460,10 +460,12 @@ func (d *AnthropicStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
 		return nil, nil
 	case "message_stop":
 		finish := mapAnthropicStop(d.stopReason)
-		evs := []Event{{Type: EventDone, Finish: finish}}
+		// usage 先于 done 发出,便于下游编码器把用量并入终止事件
+		evs := []Event{}
 		if d.pendingUsage != nil {
 			evs = append(evs, Event{Type: EventUsage, Usage: d.pendingUsage})
 		}
+		evs = append(evs, Event{Type: EventDone, Finish: finish})
 		// 重置状态
 		d.pendingUsage = nil
 		d.stopReason = ""
@@ -476,7 +478,8 @@ func (d *AnthropicStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
 // ---- 流式:[]Event -> 下游 Anthropic SSE 行 ----
 
 type AnthropicStreamEncoder struct {
-	blockIndex int
+	blockIndex   int
+	pendingUsage *Usage
 }
 
 func (e *AnthropicStreamEncoder) Encode(ev Event) ([][]byte, error) {
@@ -499,6 +502,12 @@ func (e *AnthropicStreamEncoder) Encode(ev Event) ([][]byte, error) {
 		}
 		e.blockIndex++
 		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	case EventUsage:
+		// 独立 usage 事件:暂存,并入随后的 message_delta
+		if ev.Usage != nil {
+			e.pendingUsage = ev.Usage
+		}
+		return nil, nil
 	case EventDone:
 		stopReason := "end_turn"
 		switch ev.Finish {
@@ -508,8 +517,11 @@ func (e *AnthropicStreamEncoder) Encode(ev Event) ([][]byte, error) {
 			stopReason = "tool_use"
 		}
 		usage := map[string]any{"output_tokens": 0}
-		if ev.Usage != nil {
+		switch {
+		case ev.Usage != nil:
 			usage = map[string]any{"output_tokens": ev.Usage.OutputTokens}
+		case e.pendingUsage != nil:
+			usage = map[string]any{"output_tokens": e.pendingUsage.OutputTokens}
 		}
 		deltaLine := map[string]any{
 			"type":  "message_delta",
@@ -525,4 +537,7 @@ func (e *AnthropicStreamEncoder) Encode(ev Event) ([][]byte, error) {
 	return nil, fmt.Errorf("unknown event type %d", ev.Type)
 }
 
-func (e *AnthropicStreamEncoder) Reset() { e.blockIndex = 0 }
+func (e *AnthropicStreamEncoder) Reset() {
+	e.blockIndex = 0
+	e.pendingUsage = nil
+}

@@ -415,7 +415,8 @@ func (d *ResponsesStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
 // ---- 流式:[]Event -> 下游 Responses SSE 行 ----
 
 type ResponsesStreamEncoder struct {
-	toolItemID int
+	toolItemID   int
+	pendingUsage *Usage
 }
 
 func (e *ResponsesStreamEncoder) Encode(ev Event) ([][]byte, error) {
@@ -434,14 +435,24 @@ func (e *ResponsesStreamEncoder) Encode(ev Event) ([][]byte, error) {
 			"delta":   ev.ToolCall.Arguments,
 		}
 		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	case EventUsage:
+		// 独立 usage 事件:暂存,并入随后的 response.completed
+		if ev.Usage != nil {
+			e.pendingUsage = ev.Usage
+		}
+		return nil, nil
 	case EventDone:
+		usage := ev.Usage
+		if usage == nil {
+			usage = e.pendingUsage
+		}
 		line := map[string]any{
 			"type": "response.completed",
 			"response": map[string]any{
 				"id": "resp_stream", "object": "response", "model": "",
 				"status": "completed",
 				"output": []any{},
-				"usage":  usageToResponses(ev.Usage),
+				"usage":  usageToResponses(usage),
 			},
 		}
 		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
@@ -449,7 +460,10 @@ func (e *ResponsesStreamEncoder) Encode(ev Event) ([][]byte, error) {
 	return nil, fmt.Errorf("unknown event type %d", ev.Type)
 }
 
-func (e *ResponsesStreamEncoder) Reset() { e.toolItemID = 0 }
+func (e *ResponsesStreamEncoder) Reset() {
+	e.toolItemID = 0
+	e.pendingUsage = nil
+}
 
 func usageToResponses(u *Usage) map[string]any {
 	if u == nil {

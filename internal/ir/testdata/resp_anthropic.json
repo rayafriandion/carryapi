@@ -1,0 +1,12 @@
+{
+  "id": "msg_123",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-5-sonnet-20241022",
+  "content": [
+    {"type": "text", "text": "The weather in Beijing is sunny."},
+    {"type": "tool_use", "id": "tu_9", "name": "get_weather", "input": {"city": "beijing"}}
+  ],
+  "stop_reason": "tool_use",
+  "usage": {"input_tokens": 10, "output_tokens": 15, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3}
+}

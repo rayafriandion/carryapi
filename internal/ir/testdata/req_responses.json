@@ -1,0 +1,13 @@
+{
+  "model": "gpt-4o",
+  "instructions": "You are a helpful assistant.",
+  "input": [
+    {"role": "user", "content": [{"type": "input_text", "text": "What's the weather in Beijing?"}]},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"beijing\"}"},
+    {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}
+  ],
+  "tools": [{"type": "function", "name": "get_weather", "description": "Get weather for a city", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}],
+  "tool_choice": "auto",
+  "temperature": 0.7,
+  "max_output_tokens": 100
+}

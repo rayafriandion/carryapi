@@ -1,0 +1,13 @@
+{
+  "model": "claude-3-5-sonnet-20241022",
+  "system": "You are a helpful assistant.",
+  "messages": [
+    {"role": "user", "content": "What's the weather in Beijing?"},
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "get_weather", "input": {"city": "beijing"}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": [{"type": "text", "text": "sunny"}]}]}
+  ],
+  "tools": [{"name": "get_weather", "description": "Get weather for a city", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}],
+  "tool_choice": {"type": "auto"},
+  "temperature": 0.7,
+  "max_tokens": 100
+}

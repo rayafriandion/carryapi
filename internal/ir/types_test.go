@@ -11,6 +11,7 @@ func TestRequestJSONRoundTrip(t *testing.T) {
 		Model: "gpt-4o",
 		Messages: []Message{
 			{Role: "user", Content: []ContentPart{{Type: "text", Text: "hi"}}},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Name: "get_weather", Arguments: `{"city":"beijing"}`}}},
 		},
 		System: []ContentPart{{Type: "text", Text: "be helpful"}},
 	}
@@ -22,8 +23,11 @@ func TestRequestJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if len(back.Messages) != 1 || back.Messages[0].Content[0].Text != "hi" {
+	if len(back.Messages) != 2 || back.Messages[0].Content[0].Text != "hi" {
 		t.Errorf("round trip mismatch: %+v", back)
+	}
+	if len(back.Messages[1].ToolCalls) != 1 || back.Messages[1].ToolCalls[0].Name != "get_weather" {
+		t.Errorf("tool calls round trip mismatch: %+v", back.Messages[1].ToolCalls)
 	}
 	if len(back.System) != 1 || back.System[0].Text != "be helpful" {
 		t.Errorf("system round trip mismatch: %+v", back.System)

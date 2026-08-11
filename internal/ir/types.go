@@ -20,8 +20,9 @@ type Request struct {
 type Message struct {
 	Role       string // system/user/assistant/tool
 	Content    []ContentPart
-	ToolCallID string // role=tool 时关联的 tool_use/call id
-	Name       string // role=tool 时的函数名(Anthropic 无,置空)
+	ToolCalls  []ToolCall // assistant 消息的工具调用(Chat/Responses)
+	ToolCallID string     // role=tool 时关联的 tool_use/call id
+	Name       string     // role=tool 时的函数名(Anthropic 无,置空)
 }
 
 // ContentPart 是多模态/工具内容单元。

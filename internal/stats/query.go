@@ -321,3 +321,119 @@ func QuerySuccessRate(db *sql.DB, p QueryParams, group string) ([]SuccessStat, e
 	}
 	return out, rows.Err()
 }
+
+// LogEntry 一条请求日志(含关联信息)。
+type LogEntry struct {
+	RequestID     string
+	UserID        int64
+	Email         string
+	CustomModel   string
+	ProviderName  string // 关联 upstream_providers
+	UpstreamModel string
+	ProtocolIn    string
+	ProtocolOut   string
+	InputTokens   int64
+	OutputTokens  int64
+	CacheRead     int64
+	CacheCreation int64
+	Cost          float64
+	DurationMs    int64
+	StatusCode    int
+	ErrorType     string
+	ErrorMessage  string
+	Stream        bool
+	CreatedAt     time.Time
+}
+
+// LogFilter 日志筛选条件。
+type LogFilter struct {
+	Start      time.Time
+	End        time.Time
+	UserID     *int64 // nil=全部
+	Model      string
+	StatusCode *int
+	ErrorType  string
+	RequestID  string
+	Page       int // 1-based
+	PageSize   int // 默认 50,上限 200
+}
+
+func (f *LogFilter) normalize() {
+	if f.Page < 1 {
+		f.Page = 1
+	}
+	if f.PageSize < 1 {
+		f.PageSize = 50
+	}
+	if f.PageSize > 200 {
+		f.PageSize = 200
+	}
+}
+
+// logsWhere 构造日志查询的 WHERE 子句。
+func (f *LogFilter) whereClause() (string, []any) {
+	clause := "rl.created_at >= ? AND rl.created_at <= ?"
+	args := []any{f.Start, f.End}
+	if f.UserID != nil {
+		clause += " AND rl.user_id = ?"
+		args = append(args, *f.UserID)
+	}
+	if f.Model != "" {
+		clause += " AND rl.custom_model = ?"
+		args = append(args, f.Model)
+	}
+	if f.StatusCode != nil {
+		clause += " AND rl.status_code = ?"
+		args = append(args, *f.StatusCode)
+	}
+	if f.ErrorType != "" {
+		clause += " AND rl.error_type = ?"
+		args = append(args, f.ErrorType)
+	}
+	if f.RequestID != "" {
+		clause += " AND rl.request_id = ?"
+		args = append(args, f.RequestID)
+	}
+	return clause, args
+}
+
+// QueryLogs 返回分页日志 + 总数。
+func QueryLogs(db *sql.DB, f LogFilter) (int64, []LogEntry, error) {
+	f.normalize()
+	clause, args := f.whereClause()
+
+	var total int64
+	err := db.QueryRow(`SELECT COUNT(*) FROM request_logs rl WHERE `+clause, args...).Scan(&total)
+	if err != nil {
+		return 0, nil, fmt.Errorf("count logs: %w", err)
+	}
+
+	offset := (f.Page - 1) * f.PageSize
+	query := `SELECT rl.request_id, rl.user_id, COALESCE(u.email,''), rl.custom_model,
+		COALESCE(up.name,''), rl.upstream_model, rl.protocol_in, rl.protocol_out,
+		rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
+		rl.cost, COALESCE(rl.duration_ms,0), rl.status_code, rl.error_type, COALESCE(rl.error_message,''),
+		COALESCE(rl.stream, 0), rl.created_at
+		FROM request_logs rl
+		LEFT JOIN users u ON rl.user_id = u.id
+		LEFT JOIN upstream_providers up ON rl.provider_id = up.id
+		WHERE ` + clause + ` ORDER BY rl.created_at DESC, rl.id DESC LIMIT ? OFFSET ?`
+	args = append(args, f.PageSize, offset)
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return 0, nil, fmt.Errorf("query logs: %w", err)
+	}
+	defer rows.Close()
+	var items []LogEntry
+	for rows.Next() {
+		var e LogEntry
+		if err := rows.Scan(&e.RequestID, &e.UserID, &e.Email, &e.CustomModel, &e.ProviderName,
+			&e.UpstreamModel, &e.ProtocolIn, &e.ProtocolOut, &e.InputTokens, &e.OutputTokens,
+			&e.CacheRead, &e.CacheCreation, &e.Cost, &e.DurationMs, &e.StatusCode, &e.ErrorType,
+			&e.ErrorMessage, &e.Stream, &e.CreatedAt); err != nil {
+			return 0, nil, err
+		}
+		items = append(items, e)
+	}
+	return total, items, rows.Err()
+}

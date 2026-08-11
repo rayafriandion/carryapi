@@ -217,3 +217,69 @@ func TestQuerySuccessRateByProvider(t *testing.T) {
 		t.Fatalf("rows = %d, want 2 (providers 1,2)", len(rows))
 	}
 }
+
+func TestQueryLogsPagination(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	total, items, err := QueryLogs(d, LogFilter{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(),
+		Page: 1, PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if total != 4 {
+		t.Errorf("total = %d, want 4", total)
+	}
+	if len(items) != 2 {
+		t.Errorf("items = %d, want 2 (page size)", len(items))
+	}
+	// 第二页
+	_, items2, _ := QueryLogs(d, LogFilter{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(),
+		Page: 2, PageSize: 2,
+	})
+	if len(items2) != 2 {
+		t.Errorf("page 2 items = %d, want 2", len(items2))
+	}
+}
+
+func TestQueryLogsFilterModel(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	total, _, err := QueryLogs(d, LogFilter{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(),
+		Model: "my-claude", Page: 1, PageSize: 50,
+	})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1 (my-claude only)", total)
+	}
+}
+
+func TestQueryLogsFilterErrorType(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	total, _, _ := QueryLogs(d, LogFilter{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(),
+		ErrorType: "invalid_request", Page: 1, PageSize: 50,
+	})
+	if total != 1 {
+		t.Errorf("total = %d, want 1 (invalid_request only)", total)
+	}
+}
+
+func TestQueryLogsUserFilter(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	uid := int64(1)
+	total, _, _ := QueryLogs(d, LogFilter{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(),
+		UserID: &uid, Page: 1, PageSize: 50,
+	})
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (user 1)", total)
+	}
+}

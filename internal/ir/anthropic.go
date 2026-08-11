@@ -211,6 +211,9 @@ func EncodeAnthropicRequest(r *Request) ([]byte, error) {
 			}
 			msg["content"] = blocks
 		case "tool":
+			// Anthropic Messages API 只接受 user/assistant 角色;
+			// role:"tool" 是 IR 内部约定,tool_result 块 + tool_use_id 承载语义。
+			msg["role"] = "user"
 			var blocks []any
 			for _, p := range m.Content {
 				if p.Type == "text" {

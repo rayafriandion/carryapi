@@ -6,6 +6,65 @@ import (
 	"testing"
 )
 
+func TestEncodeAnthropicRequestToolResultRoleUser(t *testing.T) {
+	// C1 回归:Anthropic Messages API 不接受 role:"tool",编码时必须映射为 "user"。
+	r := &Request{
+		Model: "claude-3-5-sonnet-20241022",
+		Messages: []Message{
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "tu_1", Type: "function", Name: "get_weather", Arguments: `{"city":"beijing"}`}}},
+			{Role: "tool", ToolCallID: "tu_1", Content: []ContentPart{{Type: "text", Text: "sunny"}}},
+		},
+		MaxTokens: intPtr(50),
+	}
+	out, err := EncodeAnthropicRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeAnthropicRequest: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d, want 2", len(msgs))
+	}
+	// 第二条消息是 tool_result,角色必须是 user
+	tm := msgs[1].(map[string]any)
+	if tm["role"] != "user" {
+		t.Errorf("tool_result message role = %v, want \"user\"", tm["role"])
+	}
+	content := tm["content"].([]any)
+	tr := content[0].(map[string]any)
+	if tr["type"] != "tool_result" || tr["tool_use_id"] != "tu_1" {
+		t.Errorf("tool_result block = %+v", tr)
+	}
+}
+
+func TestEncodeAnthropicRequestToolResultRoleUserFromFixture(t *testing.T) {
+	// C1 回归(协议真实路径):decode anthropic fixture -> encode,断言角色重映射。
+	r, err := DecodeAnthropicRequest(readTestdata(t, "req_anthropic.json"))
+	if err != nil {
+		t.Fatalf("DecodeAnthropicRequest: %v", err)
+	}
+	out, err := EncodeAnthropicRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeAnthropicRequest: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %d, want 3", len(msgs))
+	}
+	tm := msgs[2].(map[string]any)
+	if tm["role"] != "user" {
+		t.Errorf("tool_result message role = %v, want \"user\"", tm["role"])
+	}
+	content := tm["content"].([]any)
+	tr := content[0].(map[string]any)
+	if tr["type"] != "tool_result" || tr["tool_use_id"] != "tu_1" {
+		t.Errorf("tool_result block = %+v", tr)
+	}
+}
+
 func TestDecodeAnthropicRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "claude-3-5-sonnet-20241022",

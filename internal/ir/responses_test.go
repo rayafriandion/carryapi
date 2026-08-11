@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestEncodeResponsesRequestToolResultPart(t *testing.T) {
+	// I1 回归:tool_result part 经 Responses 边界输出为 function_call_output 纯文本。
+	r := &Request{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{Role: "tool", ToolCallID: "call_1", Content: []ContentPart{{
+				Type: "tool_result", ToolUseID: "call_1", IsError: true,
+				ToolResultContent: []ContentPart{{Type: "text", Text: "boom"}},
+			}}},
+		},
+	}
+	out, err := EncodeResponsesRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeResponsesRequest: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	input := m["input"].([]any)
+	fco := input[0].(map[string]any)
+	if fco["type"] != "function_call_output" || fco["call_id"] != "call_1" || fco["output"] != "boom" {
+		t.Errorf("function_call_output = %+v", fco)
+	}
+}
+
 func TestDecodeResponsesRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "gpt-4o",

@@ -150,13 +150,16 @@ func decodeAnthropicMessage(m anthropicMessageRaw) (Message, error) {
 			if err != nil {
 				return Message{}, err
 			}
-			// IR 统一用 Chat 风格:tool 结果消息 Role=tool + ToolCallID,
-			// 内容拍平为 text parts(与 responses.go 的 function_call_output 一致)。
+			// IR 约定:一条 tool_result 块 = 一条 role=tool 消息,
+			// 内容为 tool_result ContentPart(保留 is_error,失败的工具执行对下游可检测)。
 			msg.Role = "tool"
 			if msg.ToolCallID == "" {
 				msg.ToolCallID = b.ToolUseID
 			}
-			msg.Content = append(msg.Content, content...)
+			msg.Content = append(msg.Content, ContentPart{
+				Type: "tool_result", ToolUseID: b.ToolUseID,
+				ToolResultContent: content, IsError: b.IsError,
+			})
 		}
 	}
 	return msg, nil
@@ -214,15 +217,7 @@ func EncodeAnthropicRequest(r *Request) ([]byte, error) {
 			// Anthropic Messages API 只接受 user/assistant 角色;
 			// role:"tool" 是 IR 内部约定,tool_result 块 + tool_use_id 承载语义。
 			msg["role"] = "user"
-			var blocks []any
-			for _, p := range m.Content {
-				if p.Type == "text" {
-					blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
-				}
-			}
-			msg["content"] = []any{map[string]any{
-				"type": "tool_result", "tool_use_id": m.ToolCallID, "content": blocks,
-			}}
+			msg["content"] = encodeAnthropicToolResults(m)
 		default:
 			msg["content"] = encodeAnthropicContent(m.Content)
 		}
@@ -262,6 +257,46 @@ func EncodeAnthropicRequest(r *Request) ([]byte, error) {
 		out["stop_sequences"] = r.Stop
 	}
 	return json.Marshal(out)
+}
+
+// encodeAnthropicToolResults 编码 role=tool 消息的 content:
+// 有 tool_result part 时每个 part 输出为一块(保留 is_error);
+// 其余 text part 包进一个 tool_result 块(与旧行为一致,Chat/Responses 解码路径)。
+func encodeAnthropicToolResults(m Message) []any {
+	var toolBlocks []any
+	var textParts []ContentPart
+	for _, p := range m.Content {
+		switch p.Type {
+		case "tool_result":
+			toolBlocks = append(toolBlocks, encodeAnthropicToolResultBlock(p))
+		case "text":
+			textParts = append(textParts, p)
+		}
+	}
+	if len(textParts) > 0 {
+		var inner []any
+		for _, p := range textParts {
+			inner = append(inner, map[string]any{"type": "text", "text": p.Text})
+		}
+		toolBlocks = append(toolBlocks, map[string]any{
+			"type": "tool_result", "tool_use_id": m.ToolCallID, "content": inner,
+		})
+	}
+	return toolBlocks
+}
+
+func encodeAnthropicToolResultBlock(p ContentPart) map[string]any {
+	var inner []any
+	for _, ip := range p.ToolResultContent {
+		if ip.Type == "text" {
+			inner = append(inner, map[string]any{"type": "text", "text": ip.Text})
+		}
+	}
+	tr := map[string]any{"type": "tool_result", "tool_use_id": p.ToolUseID, "content": inner}
+	if p.IsError {
+		tr["is_error"] = true
+	}
+	return tr
 }
 
 func encodeAnthropicSystem(parts []ContentPart) any {

@@ -65,6 +65,63 @@ func TestEncodeAnthropicRequestToolResultRoleUserFromFixture(t *testing.T) {
 	}
 }
 
+func TestDecodeAnthropicRequestToolResultIsError(t *testing.T) {
+	// I1 回归:is_error=true 的 tool_result 必须保留,失败的工具执行不能被拍平成成功文本。
+	body := []byte(`{
+		"model": "claude-3-5-sonnet-20241022",
+		"messages": [
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "tu_2", "name": "get_weather", "input": {"city": "x"}}]},
+			{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_2", "is_error": true, "content": "city not found"}]}
+		],
+		"max_tokens": 50
+	}`)
+	r, err := DecodeAnthropicRequest(body)
+	if err != nil {
+		t.Fatalf("DecodeAnthropicRequest: %v", err)
+	}
+	toolMsg := r.Messages[1]
+	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "tu_2" {
+		t.Fatalf("tool message = %+v", toolMsg)
+	}
+	if len(toolMsg.Content) != 1 || toolMsg.Content[0].Type != "tool_result" {
+		t.Fatalf("tool content = %+v", toolMsg.Content)
+	}
+	tr := toolMsg.Content[0]
+	if !tr.IsError {
+		t.Error("is_error not preserved on decode")
+	}
+	if len(tr.ToolResultContent) != 1 || tr.ToolResultContent[0].Text != "city not found" {
+		t.Errorf("tool_result content = %+v", tr.ToolResultContent)
+	}
+	// 编码 -> 重新解码,is_error 保留
+	out, err := EncodeAnthropicRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeAnthropicRequest: %v", err)
+	}
+	back, err := DecodeAnthropicRequest(out)
+	if err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if len(back.Messages) != 2 {
+		t.Fatalf("re-decoded messages = %+v", back.Messages)
+	}
+	backTR := back.Messages[1].Content[0]
+	if backTR.Type != "tool_result" || !backTR.IsError || backTR.ToolResultContent[0].Text != "city not found" {
+		t.Errorf("round-trip is_error lost: %+v", backTR)
+	}
+	// 编码输出含 is_error:true
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	tm := m["messages"].([]any)[1].(map[string]any)
+	block := tm["content"].([]any)[0].(map[string]any)
+	if block["is_error"] != true {
+		t.Errorf("encoded tool_result missing is_error=true: %+v", block)
+	}
+	if block["tool_use_id"] != "tu_2" {
+		t.Errorf("encoded tool_use_id = %v", block["tool_use_id"])
+	}
+}
+
 func TestDecodeAnthropicRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "claude-3-5-sonnet-20241022",
@@ -114,8 +171,15 @@ func TestDecodeAnthropicRequestToolUse(t *testing.T) {
 		t.Errorf("arguments = %q", assistant.ToolCalls[0].Arguments)
 	}
 	toolMsg := r.Messages[1]
-	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "tu_1" || toolMsg.Content[0].Text != "sunny" {
+	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "tu_1" {
 		t.Errorf("tool message = %+v", toolMsg)
+	}
+	// I1:tool_result 解码为 tool_result ContentPart(非拍平 text)
+	if len(toolMsg.Content) != 1 || toolMsg.Content[0].Type != "tool_result" {
+		t.Fatalf("tool content = %+v, want tool_result part", toolMsg.Content)
+	}
+	if tr := toolMsg.Content[0].ToolResultContent; len(tr) != 1 || tr[0].Type != "text" || tr[0].Text != "sunny" {
+		t.Errorf("tool_result content = %+v, want [text sunny]", tr)
 	}
 	if len(r.Tools) != 1 || r.Tools[0].Name != "get_weather" {
 		t.Fatalf("tools = %+v", r.Tools)

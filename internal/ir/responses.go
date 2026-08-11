@@ -199,9 +199,10 @@ func encodeResponsesInput(msgs []Message) []any {
 	for _, m := range msgs {
 		switch m.Role {
 		case "tool":
+			// function_call_output 无 error 字段;输出为 tool_result 嵌套文本的拼接。
 			items = append(items, map[string]any{
 				"type": "function_call_output", "call_id": m.ToolCallID,
-				"output": joinText(m.Content),
+				"output": toolMessageOutputText(m),
 			})
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
@@ -266,6 +267,20 @@ func joinText(parts []ContentPart) string {
 		}
 	}
 	return s
+}
+
+// toolMessageOutputText 提取 role=tool 消息的纯文本输出:
+// tool_result part 展开为其嵌套内容,再按 joinText 拼接。
+func toolMessageOutputText(m Message) string {
+	var parts []ContentPart
+	for _, p := range m.Content {
+		if p.Type == "tool_result" {
+			parts = append(parts, p.ToolResultContent...)
+		} else {
+			parts = append(parts, p)
+		}
+	}
+	return joinText(parts)
 }
 
 // ---- 响应:上游 Responses JSON -> IR ----

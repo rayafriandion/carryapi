@@ -233,11 +233,20 @@ func EncodeChatRequest(r *Request) ([]byte, error) {
 		out.Messages = append(out.Messages, chatMessageOut{Role: "system", Content: content})
 	}
 	for _, m := range r.Messages {
-		content, err := encodeChatContent(m.Content)
-		if err != nil {
-			return nil, err
+		mo := chatMessageOut{Role: m.Role, ToolCallID: m.ToolCallID}
+		if m.Role == "tool" {
+			content, err := encodeChatToolMessageContent(m)
+			if err != nil {
+				return nil, err
+			}
+			mo.Content = content
+		} else {
+			content, err := encodeChatContent(m.Content)
+			if err != nil {
+				return nil, err
+			}
+			mo.Content = content
 		}
-		mo := chatMessageOut{Role: m.Role, Content: content, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			tcType := tc.Type
 			if tcType == "" {
@@ -270,6 +279,23 @@ func EncodeChatRequest(r *Request) ([]byte, error) {
 		out.Stop, _ = json.Marshal(r.Stop)
 	}
 	return json.Marshal(out)
+}
+
+// encodeChatToolMessageContent 编码 role=tool 消息:OpenAI Chat 的 tool 消息 content 只是纯文本,
+// 无 is_error 字段;tool_result 部分的嵌套文本拼接为一行(is_error 在 Chat 边界丢失,协议不支持)。
+func encodeChatToolMessageContent(m Message) (json.RawMessage, error) {
+	var parts []ContentPart
+	for _, p := range m.Content {
+		if p.Type == "tool_result" {
+			parts = append(parts, p.ToolResultContent...)
+		} else {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return json.RawMessage("null"), nil
+	}
+	return json.Marshal(joinText(parts))
 }
 
 func encodeChatContent(parts []ContentPart) (json.RawMessage, error) {

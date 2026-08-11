@@ -6,6 +6,64 @@ import (
 	"testing"
 )
 
+func TestEncodeChatRequestToolResultPart(t *testing.T) {
+	// I1 回归:Anthropic 解码出的 tool_result part 经 Chat 边界应拼接为纯文本 tool 消息。
+	r := &Request{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Name: "get_weather", Arguments: `{"city":"beijing"}`}}},
+			{Role: "tool", ToolCallID: "call_1", Content: []ContentPart{{
+				Type: "tool_result", ToolUseID: "call_1", IsError: true,
+				ToolResultContent: []ContentPart{{Type: "text", Text: "city not found"}},
+			}}},
+		},
+	}
+	out, err := EncodeChatRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeChatRequest: %v", err)
+	}
+	var m struct {
+		Messages []struct {
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tool := m.Messages[1]
+	if tool.Role != "tool" || tool.ToolCallID != "call_1" || tool.Content != "city not found" {
+		t.Errorf("tool message = %+v", tool)
+	}
+}
+
+func TestEncodeChatRequestToolResultPartMultiBlock(t *testing.T) {
+	// tool_result part 内的多段 text 按行拼接。
+	r := &Request{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{Role: "tool", ToolCallID: "call_9", Content: []ContentPart{{
+				Type: "tool_result", ToolUseID: "call_9",
+				ToolResultContent: []ContentPart{{Type: "text", Text: "a"}, {Type: "text", Text: "b"}},
+			}}},
+		},
+	}
+	out, err := EncodeChatRequest(r)
+	if err != nil {
+		t.Fatalf("EncodeChatRequest: %v", err)
+	}
+	var m struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	json.Unmarshal(out, &m)
+	if m.Messages[0].Content != "a\nb" {
+		t.Errorf("joined content = %q, want %q", m.Messages[0].Content, "a\nb")
+	}
+}
+
 func TestDecodeChatRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "gpt-4o",

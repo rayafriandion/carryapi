@@ -13,6 +13,7 @@ import (
 	"carryapi/internal/config"
 	"carryapi/internal/proxy"
 	"carryapi/internal/settings"
+	"carryapi/internal/stats"
 	"carryapi/internal/user"
 )
 
@@ -33,6 +34,7 @@ type Deps struct {
 	Passkey  *api.PasskeyHandler
 	Catalog  *catalog.Handler
 	Proxy    *proxy.Proxy
+	Stats    *stats.Handler
 }
 
 type Server struct {

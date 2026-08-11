@@ -76,6 +76,14 @@ func (s *Server) buildRouter() http.Handler {
 				if deps.Settings != nil {
 					r.Get("/api/settings", deps.Settings.Get)
 				}
+				if deps.Stats != nil {
+					// 统计端点(GET 只读,CSRF 对 GET 放行)
+					r.Get("/api/stats/summary", deps.Stats.Summary)
+					r.Get("/api/stats/trend", deps.Stats.Trend)
+					r.Get("/api/stats/cost", deps.Stats.Cost)
+					r.Get("/api/stats/success-rate", deps.Stats.SuccessRate)
+					r.Get("/api/logs", deps.Stats.Logs)
+				}
 			})
 			// admin only
 			r.Group(func(r chi.Router) {

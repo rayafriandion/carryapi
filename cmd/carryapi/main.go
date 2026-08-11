@@ -22,6 +22,7 @@ import (
 	"carryapi/internal/proxy"
 	"carryapi/internal/server"
 	"carryapi/internal/settings"
+	"carryapi/internal/stats"
 	"carryapi/internal/user"
 	"carryapi/internal/webauthn"
 )
@@ -85,6 +86,9 @@ func main() {
 		Models: catModel, Providers: catProv, Prices: catPrice,
 	})
 
+	// 统计/管理 API handlers
+	statsH := stats.NewHandler(d)
+
 	srv := server.New(cfg, server.Deps{
 		DB:       d,
 		Store:    st,
@@ -99,6 +103,7 @@ func main() {
 		Passkey:  passkeyH,
 		Catalog:  catalogH,
 		Proxy:    proxyInstance,
+		Stats:    statsH,
 	})
 
 	// 信号处理

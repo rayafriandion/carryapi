@@ -283,3 +283,33 @@ func TestQueryLogsUserFilter(t *testing.T) {
 		t.Errorf("total = %d, want 3 (user 1)", total)
 	}
 }
+
+// TestQueryLogsNullUserAndFractionalCost 验证 NULL user 与小数 cost 的扫描。
+func TestQueryLogsNullUserAndFractionalCost(t *testing.T) {
+	d := newDB(t)
+	// 插入一条 NULL user 的日志(模拟认证失败)+ 分数 cost
+	_, err := d.Exec(`INSERT INTO request_logs(request_id, user_id, api_key_id, custom_model, protocol_in, protocol_out,
+		input_tokens, output_tokens, cost, status_code, error_type, created_at)
+		VALUES('null-user', NULL, NULL, 'my-gpt4', 'chat', 'chat', 0, 0, 0.1, 401, 'authentication', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert null-user row: %v", err)
+	}
+	total, items, err := QueryLogs(d, LogFilter{
+		Start: time.Now().Add(-24 * time.Hour).UTC(), End: time.Now().UTC(), Page: 1, PageSize: 50,
+	})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1 (only null-user row in this fresh db)", total)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	if items[0].UserID != 0 {
+		t.Errorf("UserID = %d, want 0 (NULL user)", items[0].UserID)
+	}
+	if items[0].Cost != 0.1 {
+		t.Errorf("Cost = %v, want 0.1 (fractional)", items[0].Cost)
+	}
+}

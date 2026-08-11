@@ -410,9 +410,9 @@ func QueryLogs(db *sql.DB, f LogFilter) (int64, []LogEntry, error) {
 
 	offset := (f.Page - 1) * f.PageSize
 	query := `SELECT rl.request_id, rl.user_id, COALESCE(u.email,''), rl.custom_model,
-		COALESCE(up.name,''), rl.upstream_model, rl.protocol_in, rl.protocol_out,
-		rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
-		rl.cost, COALESCE(rl.duration_ms,0), rl.status_code, rl.error_type, COALESCE(rl.error_message,''),
+		COALESCE(up.name,''), COALESCE(rl.upstream_model,''), COALESCE(rl.protocol_in,''), COALESCE(rl.protocol_out,''),
+		COALESCE(rl.input_tokens,0), COALESCE(rl.output_tokens,0), COALESCE(rl.cache_read_tokens,0), COALESCE(rl.cache_creation_tokens,0),
+		COALESCE(rl.cost,0), COALESCE(rl.duration_ms,0), rl.status_code, COALESCE(rl.error_type,''), COALESCE(rl.error_message,''),
 		COALESCE(rl.stream, 0), rl.created_at
 		FROM request_logs rl
 		LEFT JOIN users u ON rl.user_id = u.id
@@ -427,12 +427,17 @@ func QueryLogs(db *sql.DB, f LogFilter) (int64, []LogEntry, error) {
 	var items []LogEntry
 	for rows.Next() {
 		var e LogEntry
-		if err := rows.Scan(&e.RequestID, &e.UserID, &e.Email, &e.CustomModel, &e.ProviderName,
+		// user_id 迁移后可为 NULL(鉴权失败行),cost 为 REAL(可为小数)。
+		var nu sql.NullInt64
+		var cost float64
+		if err := rows.Scan(&e.RequestID, &nu, &e.Email, &e.CustomModel, &e.ProviderName,
 			&e.UpstreamModel, &e.ProtocolIn, &e.ProtocolOut, &e.InputTokens, &e.OutputTokens,
-			&e.CacheRead, &e.CacheCreation, &e.Cost, &e.DurationMs, &e.StatusCode, &e.ErrorType,
+			&e.CacheRead, &e.CacheCreation, &cost, &e.DurationMs, &e.StatusCode, &e.ErrorType,
 			&e.ErrorMessage, &e.Stream, &e.CreatedAt); err != nil {
 			return 0, nil, err
 		}
+		e.UserID = nu.Int64 // NULL -> 0
+		e.Cost = cost
 		items = append(items, e)
 	}
 	return total, items, rows.Err()

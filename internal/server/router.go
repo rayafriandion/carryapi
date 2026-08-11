@@ -93,6 +93,18 @@ func (s *Server) buildRouter() http.Handler {
 				if deps.Settings != nil {
 					r.Put("/api/settings", deps.Settings.Update)
 				}
+				if deps.Catalog != nil {
+					r.Get("/api/providers", deps.Catalog.ListProviders)
+					r.Post("/api/providers", deps.Catalog.CreateProvider)
+					r.Put("/api/providers/{id}", deps.Catalog.UpdateProvider)
+					r.Delete("/api/providers/{id}", deps.Catalog.DeleteProvider)
+					r.Get("/api/models", deps.Catalog.ListModels)
+					r.Post("/api/models", deps.Catalog.CreateModel)
+					r.Put("/api/models/{id}", deps.Catalog.UpdateModel)
+					r.Delete("/api/models/{id}", deps.Catalog.DeleteModel)
+					r.Get("/api/models/{id}/price", deps.Catalog.GetModelPrice)
+					r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
+				}
 			})
 		})
 	}

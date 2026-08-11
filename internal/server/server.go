@@ -9,6 +9,7 @@ import (
 
 	"carryapi/internal/api"
 	"carryapi/internal/auth"
+	"carryapi/internal/catalog"
 	"carryapi/internal/config"
 	"carryapi/internal/settings"
 	"carryapi/internal/user"
@@ -29,6 +30,7 @@ type Deps struct {
 	Settings *api.SettingsHandler
 	OAuth    *api.OAuthHandler
 	Passkey  *api.PasskeyHandler
+	Catalog  *catalog.Handler
 }
 
 type Server struct {

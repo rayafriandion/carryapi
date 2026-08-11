@@ -15,6 +15,7 @@ import (
 	"carryapi/internal/api"
 	"carryapi/internal/apikey"
 	"carryapi/internal/auth"
+	"carryapi/internal/catalog"
 	"carryapi/internal/config"
 	"carryapi/internal/crypto"
 	"carryapi/internal/db"
@@ -52,6 +53,12 @@ func main() {
 	settingsH := api.NewSettingsHandler(st)
 	oauthH := api.NewOAuthHandler(us, ss, st)
 
+	// catalog(上游 provider/模型/价格 管理)
+	catProv := catalog.NewProviderStore(d, cipher)
+	catModel := catalog.NewModelStore(d)
+	catPrice := catalog.NewPriceStore(d)
+	catalogH := catalog.NewHandler(catProv, catModel, catPrice)
+
 	// WebAuthn (passkey) Relying Party config. Defaults target local dev
 	// (localhost:8080); override via env for production deployments.
 	rpID := os.Getenv("CARRYAPI_RP_ID")
@@ -83,6 +90,7 @@ func main() {
 		Settings: settingsH,
 		OAuth:    oauthH,
 		Passkey:  passkeyH,
+		Catalog:  catalogH,
 	})
 
 	// 信号处理

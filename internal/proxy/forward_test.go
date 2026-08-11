@@ -61,6 +61,39 @@ func newProxyWithUpstream(t *testing.T, upstreamURL string) (*Proxy, *user.User)
 	return newProxyWithProvider(t, upstreamURL, "sk-upstream", "openai_chat", "my-gpt4", "gpt-4o")
 }
 
+func newRateLimitUpstream(t *testing.T) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":{"message":"Rate limit exceeded for this API key","type":"rate_limit_error","code":"rate_limit_exceeded"}}`))
+	}))
+}
+
+func TestNonStreamingUpstream429Mapped(t *testing.T) {
+	up := newRateLimitUpstream(t)
+	defer up.Close()
+	p, u := newProxyWithUpstream(t, up.URL)
+	plaintext, _, _ := p.deps.Keys.Create(u.ID, "test")
+	body, _ := json.Marshal(map[string]any{"model": "my-gpt4", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != 429 {
+		t.Errorf("code = %d, want 429 (upstream status propagated)", rec.Code)
+	}
+	// 错误体应含上游 message
+	if !bytes.Contains(rec.Body.Bytes(), []byte("Rate limit exceeded")) {
+		t.Errorf("body = %s, want upstream message", rec.Body.String())
+	}
+	// 日志 error_type=rate_limit
+	var errType string
+	p.deps.DB.QueryRow("SELECT error_type FROM request_logs").Scan(&errType)
+	if errType != "rate_limit" {
+		t.Errorf("error_type = %q, want rate_limit", errType)
+	}
+}
+
 func TestNonStreamingChat(t *testing.T) {
 	up := newUpstreamServer(t)
 	defer up.Close()

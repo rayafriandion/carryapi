@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,7 +146,10 @@ func (p *Proxy) forwardNonStreaming(w http.ResponseWriter, rc *requestContext, u
 		return
 	}
 	if upResp.StatusCode >= 400 {
-		p.writeError(w, rc, ir.NewError("upstream", "upstream_error", fmt.Sprintf("upstream returned %d: %s", upResp.StatusCode, truncate(body, 200)), 502))
+		// 提取上游错误信息(尽力):尝试解码上游协议错误体的 message
+		msg := upstreamErrorMessage(rc.provider.Protocol, body)
+		e := upstreamErrorFromStatus(upResp.StatusCode, msg)
+		p.writeError(w, rc, e)
 		return
 	}
 	// 上游 -> IR
@@ -171,6 +175,48 @@ func (p *Proxy) forwardNonStreaming(w http.ResponseWriter, rc *requestContext, u
 	w.WriteHeader(200)
 	w.Write(out)
 	p.recordStats(rc)
+}
+
+// upstreamErrorFromStatus 把上游 HTTP 状态码映射为 ir.Error。
+// 状态码透传给客户端(429->429, 401->401 等),保留上游语义。
+func upstreamErrorFromStatus(status int, message string) *ir.Error {
+	typ := "upstream"
+	code := "upstream_error"
+	if message == "" {
+		message = fmt.Sprintf("upstream returned %d", status)
+	}
+	switch {
+	case status == 429:
+		typ, code = "rate_limit", "upstream_rate_limited"
+	case status == 401:
+		typ, code = "authentication", "upstream_unauthorized"
+	case status == 403:
+		typ, code = "permission", "upstream_forbidden"
+	case status == 404:
+		typ, code = "not_found", "upstream_not_found"
+	case status >= 400 && status < 500:
+		typ, code = "invalid_request", "upstream_bad_request"
+	}
+	// 透传上游状态码(客户端需据此退避/重试),4xx/5xx 均保留原值
+	return ir.NewError(typ, code, message, status)
+}
+
+// upstreamErrorMessage 尽力从上游错误体提取 message。
+// OpenAI: {"error":{"message":...}};Anthropic: {"error":{"message":...}}。
+// 提取失败返回空串(调用方用通用消息)。
+func upstreamErrorMessage(protocol string, body []byte) string {
+	var v struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return truncate(body, 200)
+	}
+	if v.Error.Message != "" {
+		return v.Error.Message
+	}
+	return truncate(body, 200)
 }
 
 func decodeUpstreamResponse(protocol string, body []byte) (*ir.Response, error) {

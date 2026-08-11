@@ -28,6 +28,16 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	jsonOut(w, status, map[string]string{"error": msg})
 }
 
+// parseIDParam 解析 URL 中的数字 id,非法时写 400 并返回 (0, false)。
+func parseIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonErr(w, 400, "invalid id")
+		return 0, false
+	}
+	return id, true
+}
+
 // ---- providers ----
 
 func (h *Handler) ListProviders(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +76,10 @@ func (h *Handler) CreateProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateProvider(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
 	var req struct {
 		Name     string `json:"name"`
 		BaseURL  string `json:"base_url"`
@@ -86,7 +99,10 @@ func (h *Handler) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteProvider(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
 	if err := h.providers.Delete(id); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
@@ -131,7 +147,10 @@ func (h *Handler) CreateModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
 	var req struct {
 		Name          string `json:"name"`
 		ProviderID    int64  `json:"provider_id"`
@@ -154,7 +173,10 @@ func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteModel(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
 	if err := h.models.Delete(id); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
@@ -165,7 +187,10 @@ func (h *Handler) DeleteModel(w http.ResponseWriter, r *http.Request) {
 // ---- prices ----
 
 func (h *Handler) GetModelPrice(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
 	price, err := h.prices.GetCurrent(id)
 	if err != nil {
 		if err == ErrNoPrice {
@@ -193,7 +218,10 @@ func (h *Handler) GetModelPrice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SetModelPrice(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
 	var req struct {
 		InputPrice      float64  `json:"input_price"`
 		OutputPrice     float64  `json:"output_price"`

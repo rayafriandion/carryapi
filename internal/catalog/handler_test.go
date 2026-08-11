@@ -92,6 +92,24 @@ func TestModelCRUDHandler(t *testing.T) {
 	}
 }
 
+func TestInvalidIDParamReturns400(t *testing.T) {
+	f := newCatalogFixture(t)
+	h := NewHandler(f.providers, f.models, f.prices)
+	r := chi.NewRouter()
+	r.With(middleware.RequireRole("admin")).Put("/api/providers/{id}", h.UpdateProvider)
+	// 非数字 id -> 400 invalid id
+	req := httptest.NewRequest("PUT", "/api/providers/abc", bytes.NewReader([]byte(`{"name":"x"}`)))
+	req = req.WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 400 {
+		t.Errorf("code = %d, want 400", rec.Code)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("invalid id")) {
+		t.Errorf("body = %s, want invalid id", rec.Body.String())
+	}
+}
+
 func TestPriceHandler(t *testing.T) {
 	f := newCatalogFixture(t)
 	h := NewHandler(f.providers, f.models, f.prices)

@@ -25,7 +25,8 @@ type streamEncoder interface {
 func (p *Proxy) streamResponse(w http.ResponseWriter, rc *requestContext, upResp *http.Response, downstream string) {
 	if upResp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(upResp.Body, 4096))
-		p.writeError(w, rc, ir.NewError("upstream", "upstream_error", fmt.Sprintf("upstream returned %d: %s", upResp.StatusCode, truncate(body, 200)), 502))
+		e := upstreamErrorFromStatus(upResp.StatusCode, upstreamErrorMessage(rc.provider.Protocol, body))
+		p.writeError(w, rc, e)
 		return
 	}
 	// 上游 Decoder(按 provider.Protocol)
@@ -58,11 +59,8 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, rc *requestContext, upResp
 		if len(line) == 0 {
 			continue
 		}
-		// 处理单条 data 行(每个事件块可能有多行 data,简化:逐行喂 decoder)
-		if !bytes.HasPrefix(line, []byte("data:")) {
-			continue
-		}
-		payload := bytes.TrimSpace(line[len("data:"):])
+		// 每个事件块可能含 event:/data: 多行;提取 data 负载后统一解码。
+		payload := extractDataPayload(line)
 		if len(payload) == 0 {
 			continue
 		}
@@ -85,7 +83,31 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, rc *requestContext, upResp
 			flusher.Flush()
 		}
 	}
+	// 流中途失败(scanner 错误,如上游提前断开/超长行):记录错误类型但不改已写头的状态码。
+	if err := scanner.Err(); err != nil {
+		rc.errorType = "upstream"
+		rc.errorMessage = "stream read error: " + err.Error()
+	}
 	p.recordStats(rc)
+}
+
+// extractDataPayload 从 SSE 事件块中提取所有 data: 负载并拼接。
+// 忽略注释(:)行与 event: 事件名行;多条 data: 直接拼接(与 ir.SplitSSE 一致,用于重组被拆分的 JSON 片段)。
+func extractDataPayload(block []byte) []byte {
+	var payload []byte
+	for _, line := range bytes.Split(block, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] == ':' {
+			continue // 注释
+		}
+		if bytes.HasPrefix(line, []byte("event:")) {
+			continue // 事件名(ir decoder 按 JSON type 分派,不需要)
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			payload = append(payload, bytes.TrimSpace(line[len("data:"):])...)
+		}
+	}
+	return payload
 }
 
 // collectEvent 从统一事件提取用量(统计用)。
@@ -123,18 +145,22 @@ func newDownstreamStreamEncoder(downstream string) (streamEncoder, error) {
 	return nil, fmt.Errorf("unknown downstream protocol %q", downstream)
 }
 
-// splitSSERecords 是 bufio.SplitFunc:按 "\n\n" 分割 SSE 事件。
+// splitSSERecords 是 bufio.SplitFunc:按空行("\n\n" 或 "\r\n\r\n")分割 SSE 事件。
 func splitSSERecords(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	for i := 0; i+1 < len(data); i++ {
-		if data[i] == '\n' && data[i+1] == '\n' {
+	for i := 0; i < len(data); i++ {
+		if i+1 < len(data) && data[i] == '\n' && data[i+1] == '\n' {
 			return i + 2, data[:i], nil
+		}
+		// CRLFCRLF
+		if i+3 < len(data) && data[i] == '\r' && data[i+1] == '\n' && data[i+2] == '\r' && data[i+3] == '\n' {
+			return i + 4, data[:i], nil
 		}
 	}
 	if atEOF {
-		if len(data) == 0 {
-			return 0, nil, nil
+		if len(data) > 0 {
+			return len(data), data, nil
 		}
-		return len(data), data, nil
+		return 0, nil, nil
 	}
 	return 0, nil, nil
 }

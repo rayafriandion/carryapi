@@ -3,11 +3,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
+	"carryapi/internal/apikey"
 	"carryapi/internal/auth"
 	"carryapi/internal/crypto"
 	"carryapi/internal/db"
@@ -16,29 +20,17 @@ import (
 	"carryapi/internal/user"
 )
 
-func setupAPI(t *testing.T) (*AuthHandler, *user.Store) {
-	t.Helper()
-	d, _ := db.Open(":memory:")
-	db.Migrate(d)
-	t.Cleanup(func() { d.Close() })
-	c := mustCipher(t)
-	us := user.New(d, c)
-	ss := auth.NewSessionStore(d)
-	st := settings.New(d)
-	st.Set("registration_open", "true")
-	ls := auth.NewLoginService(us, ss, st)
-	return NewAuthHandler(ls, ss, us, st), us
-}
-
 type apiFixture struct {
 	auth     *AuthHandler
 	users    *user.Store
+	keys     *apikey.Store
 	sessions *auth.SessionStore
 	settings *settings.Store
 	ls       *auth.LoginService
+	db       *sql.DB
 }
 
-func setupAPIFixture(t *testing.T) *apiFixture {
+func setupAPI(t *testing.T) *apiFixture {
 	t.Helper()
 	d, _ := db.Open(":memory:")
 	db.Migrate(d)
@@ -49,22 +41,39 @@ func setupAPIFixture(t *testing.T) *apiFixture {
 	st := settings.New(d)
 	st.Set("registration_open", "true")
 	ls := auth.NewLoginService(us, ss, st)
-	return &apiFixture{auth: NewAuthHandler(ls, ss, us, st), users: us, sessions: ss, settings: st, ls: ls}
+	ks := apikey.New(d)
+	return &apiFixture{
+		auth:     NewAuthHandler(ls, ss, us, st),
+		users:    us,
+		keys:     ks,
+		sessions: ss,
+		settings: st,
+		ls:       ls,
+		db:       d,
+	}
+}
+
+// withChiParam injects a chi URL param into the request context so handlers
+// using chi.URLParam can read it without a real chi router.
+func withChiParam(r *http.Request, key, val string) *http.Request {
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(key, val)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
 func TestRegisterLoginLogout(t *testing.T) {
-	h, _ := setupAPI(t)
+	f := setupAPI(t)
 
 	// Register
 	body, _ := json.Marshal(map[string]string{"email": "a@x.com", "password": "pw123"})
-	rec := serve(h.Register, "POST", "/api/auth/register", body)
+	rec := serve(f.auth.Register, "POST", "/api/auth/register", body)
 	if rec.Code != 200 {
 		t.Fatalf("register code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Login
 	body, _ = json.Marshal(map[string]string{"email": "a@x.com", "password": "pw123"})
-	rec = serve(h.Login, "POST", "/api/auth/login", body)
+	rec = serve(f.auth.Login, "POST", "/api/auth/login", body)
 	if rec.Code != 200 {
 		t.Fatalf("login code=%d", rec.Code)
 	}
@@ -79,18 +88,18 @@ func TestRegisterLoginLogout(t *testing.T) {
 	}
 
 	// Logout
-	rec = serve(h.Logout, "POST", "/api/auth/logout", nil)
+	rec = serve(f.auth.Logout, "POST", "/api/auth/logout", nil)
 	if rec.Code != 200 {
 		t.Errorf("logout code=%d", rec.Code)
 	}
 }
 
 func TestLoginWrongPassword(t *testing.T) {
-	h, us := setupAPI(t)
+	f := setupAPI(t)
 	hash, _ := auth.HashPassword("pw123")
-	us.Create("b@x.com", hash, "user")
+	f.users.Create("b@x.com", hash, "user")
 	body, _ := json.Marshal(map[string]string{"email": "b@x.com", "password": "wrong"})
-	rec := serve(h.Login, "POST", "/api/auth/login", body)
+	rec := serve(f.auth.Login, "POST", "/api/auth/login", body)
 	if rec.Code != 401 {
 		t.Errorf("code=%d, want 401", rec.Code)
 	}
@@ -129,7 +138,7 @@ func mustCipher(t *testing.T) *crypto.Cipher {
 }
 
 func TestDisable2FARequiresPassword(t *testing.T) {
-	f := setupAPIFixture(t)
+	f := setupAPI(t)
 	// Build a user with a known password hash + a totp auth method
 	hash, _ := auth.HashPassword("pw123")
 	u, _ := f.users.Create("2fa@x.com", hash, "user")
@@ -175,5 +184,102 @@ func TestDisable2FARequiresPassword(t *testing.T) {
 	methods, _ = f.users.GetAuthMethods(u.ID)
 	if len(methods) != 0 {
 		t.Errorf("after disable: %d methods, want 0", len(methods))
+	}
+}
+
+func TestUserCreateAsAdmin(t *testing.T) {
+	f := setupAPI(t)
+	uh := NewUserHandler(f.users)
+	// 注入 admin 用户到 context(admin 仅存在于 context,不在 DB,所以 List 只看到新建的 user)
+	admin := &user.User{ID: 1, Email: "admin@x.com", Role: "admin", Status: "active"}
+	body, _ := json.Marshal(map[string]string{"email": "newuser@x.com", "password": "pw", "role": "user"})
+	req := httptest.NewRequest("POST", "/api/users", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	rec := httptest.NewRecorder()
+	uh.Create(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("create user code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 应能 list 看到
+	req = httptest.NewRequest("GET", "/api/users", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	rec = httptest.NewRecorder()
+	uh.List(rec, req)
+	var list []map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list) != 1 || list[0]["email"] != "newuser@x.com" {
+		t.Errorf("list = %+v", list)
+	}
+}
+
+func TestUserDeletePreventsSelf(t *testing.T) {
+	f := setupAPI(t)
+	uh := NewUserHandler(f.users)
+	admin := &user.User{ID: 1, Email: "admin@x.com", Role: "admin", Status: "active"}
+	req := httptest.NewRequest("DELETE", "/api/users/1", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	// chi URLParam 需要在 chi 路由上下文;直接调 handler 时手动设
+	req = withChiParam(req, "id", "1")
+	rec := httptest.NewRecorder()
+	uh.Delete(rec, req)
+	if rec.Code != 400 {
+		t.Errorf("deleting self should be 400, got %d", rec.Code)
+	}
+}
+
+func TestKeyCreateAndList(t *testing.T) {
+	f := setupAPI(t)
+	kh := NewKeyHandler(f.keys)
+	// 先建真实用户以满足 api_keys.user_id 的外键约束(FK 在 db.Open 中已启用)
+	realU, _ := f.users.Create("keyowner@x.com", "dummyhash", "user")
+	u := &user.User{ID: realU.ID, Role: "user", Status: "active"}
+	// create
+	body, _ := json.Marshal(map[string]string{"label": "test"})
+	req := httptest.NewRequest("POST", "/api/keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, u))
+	rec := httptest.NewRecorder()
+	kh.Create(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("create code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &created)
+	if created["key"] == nil {
+		t.Error("expected plaintext key in response")
+	}
+	// list
+	req = httptest.NewRequest("GET", "/api/keys", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, u))
+	rec = httptest.NewRecorder()
+	kh.List(rec, req)
+	var list []map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list) != 1 || list[0]["label"] != "test" {
+		t.Errorf("list = %+v", list)
+	}
+}
+
+func TestSettingsUpdateAdminOnly(t *testing.T) {
+	f := setupAPI(t)
+	sh := NewSettingsHandler(f.settings)
+	// 普通用户 -> 角色守卫在路由层,handler 本身不校验。
+	// 此测试验证:handler 在 admin 调用时能更新;非 admin 由路由 RequireRole 拦截(403)。
+	// 这里直接测 admin 成功路径:
+	admin := &user.User{ID: 1, Role: "admin", Status: "active"}
+	body, _ := json.Marshal(map[string]string{"force_2fa": "true"})
+	req := httptest.NewRequest("PUT", "/api/settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	rec := httptest.NewRecorder()
+	sh.Update(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("update code=%d", rec.Code)
+	}
+	// 验证写入
+	v, ok, _ := f.settings.Get("force_2fa")
+	if !ok || v != "true" {
+		t.Errorf("force_2fa = %q ok=%v", v, ok)
 	}
 }

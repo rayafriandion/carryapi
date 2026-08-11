@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -9,10 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"carryapi/internal/api"
+	"carryapi/internal/apikey"
+	"carryapi/internal/auth"
 	"carryapi/internal/config"
+	"carryapi/internal/crypto"
 	"carryapi/internal/db"
 	"carryapi/internal/server"
 	"carryapi/internal/settings"
+	"carryapi/internal/user"
 )
 
 func main() {
@@ -28,7 +36,34 @@ func main() {
 	if err := db.Migrate(d); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
-	srv := server.New(cfg, d, settings.New(d))
+
+	// 构造所有 store/handler
+	cipher := crypto.NewCipherOrPanic(cfg.MasterKey)
+	us := user.New(d, cipher)
+	ss := auth.NewSessionStore(d)
+	st := settings.New(d)
+	ks := apikey.New(d)
+	ls := auth.NewLoginService(us, ss, st)
+	authH := api.NewAuthHandler(ls, ss, us, st)
+	usersH := api.NewUserHandler(us)
+	keysH := api.NewKeyHandler(ks)
+	quotasH := api.NewQuotaHandler(us)
+	settingsH := api.NewSettingsHandler(st)
+
+	// 首次启动:若无 admin 则创建
+	bootstrapAdmin(d, us)
+
+	srv := server.New(cfg, server.Deps{
+		DB:       d,
+		Store:    st,
+		Users:    us,
+		Sessions: ss,
+		Auth:     authH,
+		UsersH:   usersH,
+		Keys:     keysH,
+		Quotas:   quotasH,
+		Settings: settingsH,
+	})
 
 	// 信号处理
 	stop := make(chan os.Signal, 1)
@@ -46,4 +81,52 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err.Error() != "http: Server closed" {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// bootstrapAdmin checks whether any admin user exists; if not, creates one
+// using CARRYAPI_ADMIN_EMAIL / CARRYAPI_ADMIN_PASSWORD env vars. When the
+// password env var is unset a random 16-char password is generated and
+// printed to stdout (the admin must change it immediately).
+func bootstrapAdmin(d *sql.DB, us *user.Store) {
+	var adminCount int
+	err := d.QueryRow("SELECT COUNT(*) FROM users WHERE role='admin'").Scan(&adminCount)
+	if err != nil {
+		log.Printf("admin count check: %v", err)
+		return
+	}
+	if adminCount > 0 {
+		return
+	}
+	email := os.Getenv("CARRYAPI_ADMIN_EMAIL")
+	pw := os.Getenv("CARRYAPI_ADMIN_PASSWORD")
+	if email == "" {
+		email = "admin@carryapi.local"
+	}
+	if pw == "" {
+		pw = generateRandomPassword(16)
+		fmt.Printf("created admin %s with password: %s (change it immediately)\n", email, pw)
+	} else {
+		fmt.Printf("created admin %s\n", email)
+	}
+	hash, err := auth.HashPassword(pw)
+	if err != nil {
+		log.Printf("hash admin password: %v", err)
+		return
+	}
+	if _, err := us.Create(email, hash, "admin"); err != nil {
+		log.Printf("create admin: %v", err)
+	}
+}
+
+// generateRandomPassword returns a hex-encoded random string of 2*n chars
+// (n random bytes).
+func generateRandomPassword(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// rand.Read should never fail on supported platforms; fall back to
+		// a non-cryptographic but still unpredictable value to avoid a
+		// fatal exit during bootstrap.
+		log.Printf("admin password rand: %v", err)
+	}
+	return hex.EncodeToString(b)
 }

@@ -23,7 +23,9 @@ func newServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { d.Close() })
 	cfg := config.Config{Port: 0, MasterKey: make([]byte, 32)}
-	return New(cfg, d, settings.New(d))
+	// Subproject-1 tests only exercise health/broadcast, so all handlers
+	// are left nil; buildRouter's nil-guard skips mounting their routes.
+	return New(cfg, Deps{DB: d, Store: settings.New(d)})
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -41,7 +43,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestBroadcastOffListensLoopback(t *testing.T) {
 	s := newServer(t)
-	s.store.Set("listen_host", "127.0.0.1")
+	s.deps.Store.Set("listen_host", "127.0.0.1")
 	addr, err := s.listenAddr()
 	if err != nil {
 		t.Fatalf("listenAddr: %v", err)
@@ -53,7 +55,7 @@ func TestBroadcastOffListensLoopback(t *testing.T) {
 
 func TestBroadcastOnListensAllInterfaces(t *testing.T) {
 	s := newServer(t)
-	s.store.Set("listen_host", "0.0.0.0")
+	s.deps.Store.Set("listen_host", "0.0.0.0")
 	addr, _ := s.listenAddr()
 	if !strings.HasPrefix(addr, "0.0.0.0:") {
 		t.Errorf("addr = %q, want 0.0.0.0", addr)

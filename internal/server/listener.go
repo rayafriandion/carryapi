@@ -19,7 +19,7 @@ func listenHost(store *settings.Store) string {
 
 // listenAddr 返回最终监听 host:port
 func (s *Server) listenAddr() (string, error) {
-	host := listenHost(s.store)
+	host := listenHost(s.deps.Store)
 	// Port=0 让系统分配端口(测试用)
 	return net.JoinHostPort(host, strconv.Itoa(s.cfg.Port)), nil
 }

@@ -34,8 +34,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import * as echarts from 'echarts'
-import { NGrid, NGridItem, NCard, NStatistic, NDataTable } from 'naive-ui'
-import { http } from '../api/http'
+import { NGrid, NGridItem, NCard, NStatistic, NDataTable, useMessage } from 'naive-ui'
+
+const message = useMessage()
+
+import { http, errorMessage } from '../api/http'
 
 const summary = ref<any>(null)
 const logs = ref<any[]>([])
@@ -76,8 +79,8 @@ onMounted(async () => {
     summary.value = s.data
     renderChart(t.data || [])
     logs.value = l.data.items || []
-  } catch {
-    // 静默
+  } catch (e) {
+    message.error(errorMessage(e))
   }
 })
 

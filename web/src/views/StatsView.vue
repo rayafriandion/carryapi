@@ -27,24 +27,45 @@
 
       <n-tab-pane name="cost" tab="费用">
         <n-card>
+          <template #header>
+            <div class="card-header">
+              <span>费用</span>
+              <n-button size="small" @click="exportCost">导出 CSV</n-button>
+            </div>
+          </template>
           <n-data-table :columns="costColumns" :data="costRows" size="small" />
         </n-card>
       </n-tab-pane>
 
       <n-tab-pane name="success" tab="成功率">
         <n-card>
+          <template #header>
+            <div class="card-header">
+              <span>成功率</span>
+              <n-button size="small" @click="exportSuccess">导出 CSV</n-button>
+            </div>
+          </template>
           <n-data-table :columns="successColumns" :data="successRows" size="small" />
         </n-card>
       </n-tab-pane>
     </n-tabs>
+
+    <n-modal v-model:show="drillVisible" preset="dialog" :title="`失败类型明细${drillTitle ? ' - ' + drillTitle : ''}`">
+      <n-data-table :columns="drillColumns" :data="drillRows" size="small" />
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { h, onMounted, onUnmounted, ref } from 'vue'
 import * as echarts from 'echarts'
-import { NTabs, NTabPane, NCard, NDataTable, NRadioGroup, NRadioButton } from 'naive-ui'
-import { http } from '../api/http'
+import {
+  NTabs, NTabPane, NCard, NDataTable, NRadioGroup, NRadioButton, NButton, NModal, useMessage,
+} from 'naive-ui'
+import { http, errorMessage } from '../api/http'
+import { toCSV, downloadCSV } from '../utils/csv'
+
+const message = useMessage()
 
 const summary = ref<any>(null)
 const costRows = ref<any[]>([])
@@ -80,24 +101,84 @@ const successColumns = [
   { title: '分组', key: 'Group' },
   { title: '总数', key: 'Total' },
   { title: '成功', key: 'Success' },
-  { title: '失败', key: 'Failed' },
+  {
+    title: '失败',
+    key: 'Failed',
+    render: (row: any) =>
+      h(
+        NButton,
+        { size: 'small', disabled: !row.Failed, onClick: () => openDrill(row) },
+        { default: () => row.Failed ?? 0 }
+      ),
+  },
   { title: '成功率', key: 'SuccessRate' },
   { title: '平均耗时(ms)', key: 'AvgDurationMs' },
 ]
 
+// —— 失败类型 drill-down ——
+const drillVisible = ref(false)
+const drillTitle = ref('')
+const drillRows = ref<any[]>([])
+const drillColumns = [
+  { title: '错误类型', key: 'ErrorType' },
+  { title: '数量', key: 'Count' },
+]
+
+async function openDrill(row: any) {
+  drillVisible.value = true
+  drillTitle.value = row.Group
+  drillRows.value = []
+  try {
+    const res = await http.get('/api/logs', { params: { model: row.Group, page: 1, page_size: 200 } })
+    const items = res.data?.items || []
+    const counts: Record<string, number> = {}
+    for (const it of items) {
+      if (it.ErrorType && it.ErrorType !== 'none') {
+        counts[it.ErrorType] = (counts[it.ErrorType] || 0) + 1
+      }
+    }
+    drillRows.value = Object.entries(counts)
+      .map(([ErrorType, Count]) => ({ ErrorType, Count }))
+      .sort((a, b) => b.Count - a.Count)
+  } catch (e) {
+    message.error(errorMessage(e))
+  }
+}
+
+// —— CSV 导出 ——
+function exportCost() {
+  const headers = costColumns.map((c: any) => ({ key: c.key, label: c.title }))
+  const csv = toCSV(headers, costRows.value)
+  downloadCSV(`费用_${new Date().toISOString().slice(0, 10)}.csv`, csv)
+}
+function exportSuccess() {
+  const headers = successColumns.map((c: any) => ({ key: c.key, label: c.title }))
+  const csv = toCSV(headers, successRows.value)
+  downloadCSV(`成功率_${new Date().toISOString().slice(0, 10)}.csv`, csv)
+}
+
+// —— 趋势图(双轴:请求数/左轴 + 成功率/右轴) ——
 function renderTrend(pts: any[]) {
   if (!trendEl.value) return
   if (!chart) chart = echarts.init(trendEl.value)
   chart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['请求数', '成功数', '输入 Token', '输出 Token'] },
+    legend: { data: ['请求数', '成功数', '成功率'] },
     xAxis: { type: 'category', data: pts.map((p) => p.Bucket) },
-    yAxis: { type: 'value' },
+    yAxis: [
+      { type: 'value', name: '请求数' },
+      { type: 'value', name: '成功率', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+    ],
     series: [
-      { name: '请求数', type: 'line', smooth: true, data: pts.map((p) => p.Requests) },
-      { name: '成功数', type: 'line', smooth: true, data: pts.map((p) => p.SuccessCount) },
-      { name: '输入 Token', type: 'line', smooth: true, data: pts.map((p) => p.InputTok) },
-      { name: '输出 Token', type: 'line', smooth: true, data: pts.map((p) => p.OutputTok) },
+      { name: '请求数', type: 'bar', yAxisIndex: 0, data: pts.map((p) => p.Requests ?? 0) },
+      { name: '成功数', type: 'line', smooth: true, yAxisIndex: 0, data: pts.map((p) => p.SuccessCount ?? 0) },
+      {
+        name: '成功率',
+        type: 'line',
+        smooth: true,
+        yAxisIndex: 1,
+        data: pts.map((p) => (p.Requests ? +(((p.SuccessCount ?? 0) / p.Requests) * 100).toFixed(1) : 0)),
+      },
     ],
   })
 }
@@ -106,8 +187,8 @@ async function loadTrend() {
   try {
     const res = await http.get('/api/stats/trend', { params: { granularity: granularity.value } })
     renderTrend(res.data || [])
-  } catch {
-    // 静默
+  } catch (e) {
+    message.error(errorMessage(e))
   }
 }
 
@@ -115,7 +196,9 @@ onMounted(async () => {
   try {
     const s = await http.get('/api/stats/summary')
     summary.value = s.data
-  } catch { /* 静默 */ }
+  } catch (e) {
+    message.error(errorMessage(e))
+  }
   await loadTrend()
   try {
     const [c, sr] = await Promise.all([
@@ -124,7 +207,9 @@ onMounted(async () => {
     ])
     costRows.value = c.data || []
     successRows.value = sr.data || []
-  } catch { /* 静默 */ }
+  } catch (e) {
+    message.error(errorMessage(e))
+  }
 })
 
 onUnmounted(() => {
@@ -139,6 +224,11 @@ onUnmounted(() => {
 }
 .toolbar {
   margin-bottom: 12px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 .chart {
   height: 400px;

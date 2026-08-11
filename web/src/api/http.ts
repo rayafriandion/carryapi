@@ -15,8 +15,8 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
-      // 登录失效 -> 跳登录(通过事件或 window.location)
+    if (err.response?.status === 401 && window.location.pathname !== '/login') {
+      // 已登录页面会话失效 -> 跳转登录页;登录页自身的 401(如密码错误)则交给页面内联提示
       window.location.href = '/login'
     }
     return Promise.reject(err)

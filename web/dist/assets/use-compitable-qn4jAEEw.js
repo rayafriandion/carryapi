@@ -1,0 +1,1 @@
+import{$t as e}from"./http-BFtIegGs.js";function t(t,n){return e(()=>{for(let e of n)if(t[e]!==void 0)return t[e];return t[n[n.length-1]]})}export{t};

@@ -306,3 +306,261 @@ func encodeChatToolChoice(tc *ToolChoice) (json.RawMessage, error) {
 		return nil, fmt.Errorf("unsupported tool_choice type %q", tc.Type)
 	}
 }
+
+// ---- 响应:上游 Chat JSON -> IR ----
+
+type chatResponseRaw struct {
+	ID      string          `json:"id"`
+	Model   string          `json:"model"`
+	Choices []chatChoiceRaw `json:"choices"`
+	Usage   chatUsageRaw    `json:"usage"`
+}
+
+type chatChoiceRaw struct {
+	Index        int            `json:"index"`
+	Message      chatMessageRaw `json:"message"`
+	FinishReason string         `json:"finish_reason"`
+}
+
+type chatUsageRaw struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	PromptDetails    struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+func DecodeChatResponse(body []byte) (*Response, error) {
+	var raw chatResponseRaw
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode chat response: %w", err)
+	}
+	r := &Response{ID: raw.ID, Model: raw.Model}
+	r.Usage = Usage{
+		InputTokens: raw.Usage.PromptTokens, OutputTokens: raw.Usage.CompletionTokens,
+		TotalTokens: raw.Usage.TotalTokens, CacheReadTokens: raw.Usage.PromptDetails.CachedTokens,
+	}
+	for _, c := range raw.Choices {
+		ch := Choice{Index: c.Index, Role: c.Message.Role, FinishReason: c.FinishReason}
+		content, err := decodeChatContent(c.Message.Content)
+		if err != nil {
+			return nil, err
+		}
+		ch.Content = content
+		for _, tc := range c.Message.ToolCalls {
+			ch.ToolCalls = append(ch.ToolCalls, ToolCall{
+				ID: tc.ID, Type: tc.Type, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+			})
+		}
+		r.Choices = append(r.Choices, ch)
+	}
+	return r, nil
+}
+
+// ---- 响应:IR -> 下游 Chat JSON ----
+
+type chatResponseOut struct {
+	ID      string          `json:"id"`
+	Object  string          `json:"object"`
+	Model   string          `json:"model"`
+	Choices []chatChoiceOut `json:"choices"`
+	Usage   chatUsageOut    `json:"usage"`
+}
+
+type chatChoiceOut struct {
+	Index        int            `json:"index"`
+	Message      chatMessageOut `json:"message"`
+	FinishReason string         `json:"finish_reason"`
+}
+
+type chatUsageOut struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	PromptDetails    *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+}
+
+func EncodeChatResponse(r *Response) ([]byte, error) {
+	out := chatResponseOut{ID: r.ID, Object: "chat.completion", Model: r.Model}
+	out.Usage = chatUsageOut{
+		PromptTokens: r.Usage.InputTokens, CompletionTokens: r.Usage.OutputTokens,
+		TotalTokens: r.Usage.TotalTokens,
+	}
+	if r.Usage.CacheReadTokens > 0 {
+		out.Usage.PromptDetails = &struct {
+			CachedTokens int `json:"cached_tokens"`
+		}{r.Usage.CacheReadTokens}
+	}
+	for _, c := range r.Choices {
+		co := chatChoiceOut{Index: c.Index, FinishReason: c.FinishReason}
+		co.Message.Role = c.Role
+		content, err := encodeChatContent(c.Content)
+		if err != nil {
+			return nil, err
+		}
+		co.Message.Content = content
+		for _, tc := range c.ToolCalls {
+			cto := chatToolCallOut{ID: tc.ID, Type: "function"}
+			cto.Function.Name = tc.Name
+			cto.Function.Arguments = tc.Arguments
+			co.Message.ToolCalls = append(co.Message.ToolCalls, cto)
+		}
+		out.Choices = append(out.Choices, co)
+	}
+	return json.Marshal(out)
+}
+
+// ---- 流式:上游 Chat SSE data -> []Event ----
+
+type ChatStreamDecoder struct{}
+
+type chatChunkRaw struct {
+	Choices []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Content   string              `json:"content"`
+			ToolCalls []chatStreamToolRaw `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *chatUsageRaw `json:"usage"`
+}
+
+type chatStreamToolRaw struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+func (d *ChatStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
+	if string(data) == "[DONE]" {
+		return nil, nil
+	}
+	var chunk chatChunkRaw
+	if err := json.Unmarshal(data, &chunk); err != nil {
+		return nil, fmt.Errorf("decode chat chunk: %w", err)
+	}
+	var evs []Event
+	for _, c := range chunk.Choices {
+		if c.Delta.Content != "" {
+			evs = append(evs, Event{Type: EventContentDelta, Delta: c.Delta.Content})
+		}
+		for _, tc := range c.Delta.ToolCalls {
+			evs = append(evs, Event{Type: EventToolCallDelta, ToolCall: &ToolCall{
+				ID: tc.ID, Type: "function", Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+			}})
+		}
+		if c.FinishReason != nil {
+			fin := *c.FinishReason
+			ev := Event{Type: EventDone, Finish: fin}
+			if chunk.Usage != nil {
+				ev.Usage = &Usage{
+					InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens,
+					TotalTokens: chunk.Usage.TotalTokens, CacheReadTokens: chunk.Usage.PromptDetails.CachedTokens,
+				}
+			}
+			evs = append(evs, ev)
+		}
+	}
+	if chunk.Usage != nil {
+		// 无 finish_reason 的独立 usage chunk(极少见)
+		evs = append(evs, Event{Type: EventUsage, Usage: &Usage{
+			InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens,
+			TotalTokens: chunk.Usage.TotalTokens, CacheReadTokens: chunk.Usage.PromptDetails.CachedTokens,
+		}})
+	}
+	return evs, nil
+}
+
+// ---- 流式:[]Event -> 上游 Chat SSE 行 ----
+
+type ChatStreamEncoder struct {
+	toolCallIndex int
+}
+
+func (e *ChatStreamEncoder) Encode(ev Event) ([][]byte, error) {
+	switch ev.Type {
+	case EventContentDelta:
+		chunk := map[string]any{
+			"choices": []map[string]any{{
+				"index": 0,
+				"delta": map[string]any{"content": ev.Delta},
+			}},
+		}
+		return [][]byte{EncodeSSELine(mustJSON(chunk))}, nil
+	case EventToolCallDelta:
+		if ev.ToolCall == nil {
+			return nil, fmt.Errorf("tool call delta without ToolCall")
+		}
+		tc := map[string]any{
+			"index":    e.toolCallIndex,
+			"function": map[string]string{"name": ev.ToolCall.Name, "arguments": ev.ToolCall.Arguments},
+		}
+		if ev.ToolCall.ID != "" {
+			tc["id"] = ev.ToolCall.ID
+			tc["type"] = "function"
+		}
+		e.toolCallIndex++
+		chunk := map[string]any{
+			"choices": []map[string]any{{
+				"index": 0,
+				"delta": map[string]any{"tool_calls": []map[string]any{tc}},
+			}},
+		}
+		return [][]byte{EncodeSSELine(mustJSON(chunk))}, nil
+	case EventUsage:
+		// 独立 usage 行(无 finish)
+		chunk := map[string]any{
+			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}}},
+			"usage":   usageToChat(ev.Usage),
+		}
+		return [][]byte{EncodeSSELine(mustJSON(chunk))}, nil
+	case EventDone:
+		chunk := map[string]any{
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         map[string]any{},
+				"finish_reason": ev.Finish,
+			}},
+		}
+		if ev.Usage != nil {
+			chunk["usage"] = usageToChat(ev.Usage)
+		}
+		return [][]byte{
+			EncodeSSELine(mustJSON(chunk)),
+			EncodeSSELine([]byte("[DONE]")),
+		}, nil
+	}
+	return nil, fmt.Errorf("unknown event type %d", ev.Type)
+}
+
+func (e *ChatStreamEncoder) Reset() { e.toolCallIndex = 0 }
+
+func usageToChat(u *Usage) map[string]any {
+	if u == nil {
+		return map[string]any{}
+	}
+	out := map[string]any{
+		"prompt_tokens":     u.InputTokens,
+		"completion_tokens": u.OutputTokens,
+		"total_tokens":      u.TotalTokens,
+	}
+	if u.CacheReadTokens > 0 {
+		out["prompt_tokens_details"] = map[string]int{"cached_tokens": u.CacheReadTokens}
+	}
+	return out
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err) // 仅在编码内部类型时触发,不应发生
+	}
+	return b
+}

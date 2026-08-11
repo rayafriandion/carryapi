@@ -1,1 +1,0 @@
-import{a as e,i as t,n,r,t as i}from"./index-Dip3n8g5.js";import{t as a}from"./_plugin-vue_export-helper-BDNMzG2s.js";var o={};function s(a,o){let s=e(`router-view`);return t(),i(`div`,null,[o[0]||=n(`AppLayout placeholder `,-1),r(s)])}var c=a(o,[[`render`,s]]);export{c as default};

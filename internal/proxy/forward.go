@@ -274,10 +274,3 @@ func asIRError(err error) *ir.Error {
 	}
 	return ir.NewError("internal", "internal_error", err.Error(), 500)
 }
-
-// streamResponse 是 Task 6 的占位:流式转发尚未实现,先返回 501。
-// TODO(Task 6): 删除本 stub,由 stream.go 提供真正的流式转发实现。
-func (p *Proxy) streamResponse(w http.ResponseWriter, rc *requestContext, upResp *http.Response, downstream string) {
-	upResp.Body.Close()
-	p.writeError(w, rc, ir.NewError("invalid_request", "not_implemented", "streaming forwarding not implemented yet", 501))
-}

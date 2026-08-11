@@ -74,3 +74,39 @@ func TestXExchangeAndUserID(t *testing.T) {
 		t.Errorf("uid = %q err %v", uid, err)
 	}
 }
+
+// testErrorFetchUserID asserts that both providers surface non-2xx user-endpoint
+// responses as an error instead of silently decoding an empty body.
+func testErrorFetchUserID(t *testing.T, name string, newProvider func(tokenURL, userURL string) Provider) {
+	t.Helper()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"tok","token_type":"Bearer"}`))
+	}))
+	defer tokenSrv.Close()
+	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+	}))
+	defer userSrv.Close()
+
+	p := newProvider(tokenSrv.URL, userSrv.URL)
+	tok, err := p.Exchange(context.Background(), "code", "state")
+	if err != nil {
+		t.Fatalf("[%s] Exchange: %v", name, err)
+	}
+	if _, err := p.FetchUserID(context.Background(), tok); err == nil {
+		t.Errorf("[%s] expected error for non-2xx user endpoint", name)
+	}
+}
+
+func TestDiscordFetchUserIDNon2xxErrors(t *testing.T) {
+	testErrorFetchUserID(t, "discord", func(tokenURL, userURL string) Provider {
+		return NewDiscordWithEndpoints("cid", "secret", "http://cb", tokenURL, userURL)
+	})
+}
+
+func TestXFetchUserIDNon2xxErrors(t *testing.T) {
+	testErrorFetchUserID(t, "x", func(tokenURL, userURL string) Provider {
+		return NewXWithEndpoints("cid", "secret", "http://cb", tokenURL, userURL)
+	})
+}

@@ -132,6 +132,11 @@ func (x *X) FetchUserID(ctx context.Context, token *Token) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	// 非 2xx:读 body 并返回明确错误(否则会静默解码空 body 得到空 id)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("user endpoint returned %s: %s", resp.Status, body)
+	}
 	var u struct {
 		Data struct {
 			ID string `json:"id"`

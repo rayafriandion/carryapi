@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -20,7 +22,14 @@ func (p *Proxy) authenticate(r *http.Request) (*user.User, *apikey.APIKey, error
 		return nil, nil, ir.NewError("authentication", "invalid_api_key", "invalid api key", 401)
 	}
 	u, err := p.deps.Users.GetByID(userID)
-	if err != nil || u.Status != "active" {
+	if err != nil {
+		// 用户不存在视为禁用;其他错误(DB 故障)为内部错误。
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, ir.NewError("user_disabled", "user_disabled", "user is disabled", 403)
+		}
+		return nil, nil, ir.NewError("internal", "user_lookup_failed", "failed to load user", 500)
+	}
+	if u.Status != "active" {
 		return nil, nil, ir.NewError("user_disabled", "user_disabled", "user is disabled", 403)
 	}
 	ak, err := p.deps.Keys.Get(keyID, userID)

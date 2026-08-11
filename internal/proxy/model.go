@@ -38,7 +38,10 @@ func (p *Proxy) checkQuota(u *user.User, keyID int64) error {
 		{"key", keyID},
 	}
 	for _, s := range scopes {
-		quotas, _ := p.deps.Users.GetQuotas(s.scope, s.scopeID)
+		quotas, err := p.deps.Users.GetQuotas(s.scope, s.scopeID)
+		if err != nil {
+			return ir.NewError("internal", "quota_check_failed", "failed to check quota", 500)
+		}
 		for _, q := range quotas {
 			limitTokens := q.LimitTokens
 			limitCost := q.LimitCost

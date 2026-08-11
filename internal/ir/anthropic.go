@@ -560,14 +560,14 @@ func (e *AnthropicStreamEncoder) Encode(ev Event) ([][]byte, error) {
 			// 每个 tool 块开始时先发 content_block_start(带 synthetic id 和名字,
 			// Anthropic 客户端靠它拿到工具名;input_json_delta 只带 partial_json)。
 			cb := map[string]any{
-				"type":        "tool_use",
-				"id":          "toolu_" + strconv.Itoa(e.blockIndex+1),
-				"name":        ev.ToolCall.Name,
-				"input":       map[string]any{},
+				"type":  "tool_use",
+				"id":    "toolu_" + strconv.Itoa(e.blockIndex+1),
+				"name":  ev.ToolCall.Name,
+				"input": map[string]any{},
 			}
 			lines = append(lines, EncodeSSELine(mustJSON(map[string]any{
-				"type":         "content_block_start",
-				"index":        e.blockIndex,
+				"type":          "content_block_start",
+				"index":         e.blockIndex,
 				"content_block": cb,
 			})))
 			e.toolBlockOpen = true

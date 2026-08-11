@@ -24,8 +24,8 @@ func TestEncodeChatRequestToolResultPart(t *testing.T) {
 	}
 	var m struct {
 		Messages []struct {
-			Role      string `json:"role"`
-			Content   string `json:"content"`
+			Role       string `json:"role"`
+			Content    string `json:"content"`
 			ToolCallID string `json:"tool_call_id"`
 		} `json:"messages"`
 	}

@@ -36,7 +36,7 @@ func (s *Server) buildRouter() http.Handler {
 			// authenticating via the provider, so no session exists yet.
 			if deps.OAuth != nil {
 				r.Get("/oauth/{provider}", deps.OAuth.Begin)
-				r.Get("/oauth/callback", deps.OAuth.Callback)
+				r.Get("/oauth/callback/{provider}", deps.OAuth.Callback)
 			}
 		})
 	}

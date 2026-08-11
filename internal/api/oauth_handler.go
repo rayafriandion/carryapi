@@ -104,7 +104,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// 查 auth_methods:已绑定则建 session
 	m, err := h.users.GetAuthMethod(p.Name(), uid)
 	if err == nil {
-		sess, _ := h.sessions.Create(m.UserID, 7*24*time.Hour, "", "")
+		sess, err := h.sessions.Create(m.UserID, 7*24*time.Hour, "", "")
+		if err != nil {
+			JSONError(w, 500, "session create failed")
+			return
+		}
 		setSessionCookie(w, sess.Token) // 复用 AuthHandler 的(提取公共)
 		setCSRFCookie(w)
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
@@ -122,8 +126,15 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 400, "failed to create user")
 		return
 	}
-	h.users.AddAuthMethod(u.ID, p.Name(), uid, nil)
-	sess, _ := h.sessions.Create(u.ID, 7*24*time.Hour, "", "")
+	if err := h.users.AddAuthMethod(u.ID, p.Name(), uid, nil); err != nil {
+		JSONError(w, 500, "failed to bind oauth account")
+		return
+	}
+	sess, err := h.sessions.Create(u.ID, 7*24*time.Hour, "", "")
+	if err != nil {
+		JSONError(w, 500, "session create failed")
+		return
+	}
 	setSessionCookie(w, sess.Token)
 	setCSRFCookie(w)
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)

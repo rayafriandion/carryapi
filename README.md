@@ -122,6 +122,27 @@ curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8080/v1/models
 
 上游供应商、模型与定价由管理员通过管理 API 配置:`/api/providers`、`/api/models`、`/api/models/{id}/price`。上游协议(openai_chat / openai_responses / anthropic)与客户端使用的下游协议可任意组合,由代理自动转换。
 
+## 统计 API
+
+用量、费用与成功率统计及请求日志查询。需登录(session);GET 只读,无需 CSRF 头。
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/stats/summary` | 汇总:总请求数、成功/失败数、输入/输出/缓存 token、总费用、平均耗时,并按模型/上游/Key 分列 |
+| `GET /api/stats/trend` | 时间趋势(按天/小时):各桶请求数、成功数、token、费用 |
+| `GET /api/stats/cost` | 费用核算(基于 request_logs 快照),按模型/Key/上游分组 |
+| `GET /api/stats/success-rate` | 成功率(2xx 且无 error_type 才算成功)与平均耗时,按模型/Key/上游分组 |
+| `GET /api/logs` | 请求日志分页查询 + 筛选 |
+
+公共查询参数:
+
+- `start` / `end`:时间范围,RFC3339 格式(`2026-08-01T00:00:00Z`);缺省为最近 30 天。
+- `granularity`:`day`(默认)或 `hour`,用于 `trend`。
+- `group`:`model`(默认)、`key` 或 `provider`,用于 `cost` 与 `success-rate`。
+- 日志分页与筛选:`page`(默认 1)、`page_size`(默认 50,上限 200)、`model`、`status`(HTTP 状态码)、`error_type`、`request_id`。
+
+权限:所有端点需登录。普通用户仅能看到自己的数据;admin 可查看全部,并可传 `user_id` 过滤指定用户。
+
 ## 开发
 
 ```bash

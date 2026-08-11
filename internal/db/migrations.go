@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_agent  TEXT
 );
 `},
+	{2, `
+-- 鉴权失败等无用户上下文的请求也要记 request_logs(用于错误率监控),
+-- 故 user_id / api_key_id 允许 NULL。
+ALTER TABLE request_logs ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE request_logs ALTER COLUMN api_key_id DROP NOT NULL;
+`},
 }
 
 func Migrate(d *sql.DB) error {

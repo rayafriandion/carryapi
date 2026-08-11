@@ -7,10 +7,12 @@ import (
 )
 
 // recordStats 写 request_logs + 累加配额。
-// 鉴权失败等无用户上下文的请求不记日志(request_logs.user_id/api_key_id 为 NOT NULL)。
+// 鉴权失败等无用户上下文的请求记日志(user_id/api_key_id 为 NULL,便于错误率统计);配额只累加成功请求。
 func (p *Proxy) recordStats(rc *requestContext) {
-	if rc.user == nil {
-		return // 鉴权前失败,不记日志
+	var userID, apiKeyID any
+	if rc.user != nil {
+		userID = rc.user.ID
+		apiKeyID = rc.apiKeyID
 	}
 	cost := computeCost(rc.price, rc)
 	upstreamModel := ""
@@ -44,12 +46,12 @@ func (p *Proxy) recordStats(rc *requestContext) {
 		 protocol_in, protocol_out, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 		 cost, duration_ms, status_code, error_type, error_message, stream)
 		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rc.requestID, rc.user.ID, rc.apiKeyID, modelName, providerID, upstreamModel,
+		rc.requestID, userID, apiKeyID, modelName, providerID, upstreamModel,
 		rc.downstream, protocolOutName(rc.provider), rc.inputTokens, rc.outputTokens,
 		rc.cacheRead, rc.cacheCreation, cost, durationMs, rc.statusCode, errorType, errorMessage, rc.stream)
 
-	// 配额累加
-	if rc.statusCode == 200 {
+	// 配额累加(仅成功且有用户上下文)
+	if rc.user != nil && rc.statusCode == 200 {
 		p.deps.Users.IncrementUsage("user", rc.user.ID, int64(rc.inputTokens+rc.outputTokens), cost)
 		p.deps.Users.IncrementUsage("key", rc.apiKeyID, int64(rc.inputTokens+rc.outputTokens), cost)
 	}

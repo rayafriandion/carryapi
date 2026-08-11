@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	"carryapi/internal/catalog"
@@ -29,5 +32,58 @@ func TestComputeCostNoCachePrices(t *testing.T) {
 	got := computeCost(price, rc)
 	if got != want {
 		t.Errorf("cost = %f, want %f", got, want)
+	}
+}
+
+func TestRecordStatsWritesError(t *testing.T) {
+	// 无鉴权请求 -> 401 -> request_logs 应有一条 error_type=authentication 的记录
+	up := newUpstreamServer(t)
+	defer up.Close()
+	p, _ := newProxyWithUpstream(t, up.URL)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+	var count int
+	p.deps.DB.QueryRow("SELECT COUNT(*) FROM request_logs").Scan(&count)
+	if count != 1 {
+		t.Fatalf("request_logs = %d, want 1 (auth failure logged)", count)
+	}
+	var errType, errMsg string
+	p.deps.DB.QueryRow("SELECT error_type, error_message FROM request_logs").Scan(&errType, &errMsg)
+	if errType != "authentication" {
+		t.Errorf("error_type = %q, want authentication", errType)
+	}
+	if errMsg == "" {
+		t.Error("error_message should not be empty")
+	}
+}
+
+func TestRecordStatsDuration(t *testing.T) {
+	// 非流式成功请求 -> duration_ms >= 0, stream=false
+	up := newUpstreamServer(t)
+	defer up.Close()
+	p, u := newProxyWithUpstream(t, up.URL)
+	plaintext, _, _ := p.deps.Keys.Create(u.ID, "test")
+	body, _ := json.Marshal(map[string]any{"model": "my-gpt4", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+	var durationMs int64
+	var stream bool
+	if err := p.deps.DB.QueryRow("SELECT duration_ms, stream FROM request_logs").Scan(&durationMs, &stream); err != nil {
+		t.Fatalf("request_logs row: %v", err)
+	}
+	if durationMs < 0 {
+		t.Errorf("duration_ms = %d, want >= 0", durationMs)
+	}
+	if stream {
+		t.Error("stream should be false for non-streaming request")
 	}
 }

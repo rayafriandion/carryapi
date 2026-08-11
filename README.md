@@ -89,6 +89,39 @@ OAuth 提供方通过以下 `settings` 表键配置(未设置或未完整设置�
 
 管理后台可改这些键;改后需重启进程生效。
 
+## 代理端点
+
+代理端点将上游 LLM 服务聚合为统一 API。客户端仅需携带 API Key 调用:
+
+| 端点 | 下游协议 |
+|------|----------|
+| `POST /v1/chat/completions` | OpenAI Chat |
+| `POST /v1/responses` | OpenAI Responses |
+| `POST /v1/messages` | Anthropic Messages |
+| `GET /v1/models` | OpenAI 模型列表 |
+
+鉴权方式二选一:
+
+- `Authorization: Bearer <api-key>`
+- `x-api-key: <api-key>`
+
+调用示例(Chat):
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer carry-xxxx..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"my-gpt4","messages":[{"role":"user","content":"hi"}]}'
+```
+
+模型列表:
+
+```bash
+curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8080/v1/models
+```
+
+上游供应商、模型与定价由管理员通过管理 API 配置:`/api/providers`、`/api/models`、`/api/models/{id}/price`。上游协议(openai_chat / openai_responses / anthropic)与客户端使用的下游协议可任意组合,由代理自动转换。
+
 ## 开发
 
 ```bash

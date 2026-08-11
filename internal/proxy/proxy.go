@@ -34,15 +34,16 @@ func NewProxy(deps Deps) *Proxy {
 
 // requestContext 承载一次代理请求的解析结果,贯穿转发与统计。
 type requestContext struct {
-	user       *user.User
-	apiKeyID   int64
-	downstream string // "chat" | "responses" | "anthropic"
-	requestID  string
-	stream     bool      // 流式请求(记录到日志)
-	start      time.Time // 请求开始时间(算 duration_ms)
-	model      *catalog.Model
-	provider   *catalog.Provider
-	price      *catalog.Price
+	user           *user.User
+	apiKeyID       int64
+	downstream     string // "chat" | "responses" | "anthropic"
+	requestID      string
+	stream         bool      // 流式请求(记录到日志)
+	start          time.Time // 请求开始时间(算 duration_ms)
+	requestedModel string    // 客户端请求中的模型名(resolveModel 失败时仍用于统计)
+	model          *catalog.Model
+	provider       *catalog.Provider
+	price          *catalog.Price
 	// 统计
 	inputTokens   int
 	outputTokens  int
@@ -69,13 +70,4 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 		w.Write(body)
 	}
-}
-
-// handleProxy 是占位实现:真正的上游转发在 Task 5。ServeHTTP 需要按路径分派
-// 到它才能编译,目前统一返回 501 Not Implemented。
-func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request, downstream string) {
-	body := ir.OpenAIErrorBody(ir.NewError("invalid_request", "not_implemented", "proxy forwarding not implemented yet", 501))
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(501)
-	w.Write(body)
 }

@@ -45,6 +45,50 @@ GOOS=windows GOARCH=amd64 go build -o carryapi-windows-amd64.exe ./cmd/carryapi
 
 广播开 = 监听 `0.0.0.0`(局域网/公网可访问);广播关 = 监听 `127.0.0.1`(仅本机)。存于数据库 `settings` 表 `listen_host` 键。后续子项目的管理后台提供可视化切换(改值后需重启进程)。
 
+## 认证
+
+### 首次启动管理员
+
+首次启动时自动创建管理员账号(检测到库中无 `admin` 角色用户时):
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `CARRYAPI_ADMIN_EMAIL` | admin@carryapi.local | 管理员邮箱 |
+| `CARRYAPI_ADMIN_PASSWORD` | (随机生成) | 管理员密码;未设置时生成随机 16 字节(32 位十六进制)密码并打印到 stdout,请立即修改 |
+
+### 登录方式
+
+| 方式 | 说明 |
+|------|------|
+| 密码 | `POST /api/auth/login`(邮箱 + 密码),成功后下发 session + CSRF cookie |
+| TOTP 2FA | 开启后登录返回 `requires_2fa`,再 `POST /api/auth/2fa/complete`(邮箱 + 验证码/备份码) |
+| Passkey | `POST /api/auth/passkey/register/begin` + `/finish` 注册,`POST /api/auth/passkey/login/begin` + `/finish` 登录(WebAuthn) |
+| OAuth | Discord / X,`GET /api/auth/oauth/{provider}` 发起,`GET /api/auth/oauth/callback/{provider}` 回调 |
+
+登出:`POST /api/auth/logout`。当前用户信息:`GET /api/auth/me`。
+
+### API Key
+
+- 创建:`POST /api/keys`(JSON `{"label":"..."}`),明文 key **仅此一次**返回在响应的 `key` 字段,请立即保存。
+- 列表:`GET /api/keys`(返回 `key_prefix`,不含明文)。
+- 更新/删除:`PUT/DELETE /api/keys/{id}`。
+- 创建/删除等写操作需携带 `X-CSRF-Token` 请求头(与登录下发的 `carryapi_csrf` cookie 值一致)。
+
+### 2FA 开启
+
+登录后 `POST /api/auth/2fa/setup`,返回 TOTP `secret`、`otpauth_url` 和一次性 `backup_codes`。关闭:`POST /api/auth/2fa/disable`(需密码)。
+
+### OAuth 配置环境变量
+
+OAuth 提供方通过以下 `settings` 表键配置(未设置或未完整设置时对应提供方不启用):
+
+| 键 | 说明 |
+|------|------|
+| `oauth_discord_client_id` / `oauth_discord_client_secret` / `oauth_discord_redirect_url` | Discord OAuth2 应用 |
+| `oauth_x_client_id` / `oauth_x_client_secret` / `oauth_x_redirect_url` | X(Twitter)OAuth2 应用 |
+
+管理后台可改这些键;改后需重启进程生效。
+
 ## 开发
 
 ```bash

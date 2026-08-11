@@ -36,7 +36,7 @@ func TestFullAuthFlow(t *testing.T) {
 	ks := apikey.New(d)
 	authH := NewAuthHandler(ls, ss, us, st)
 	keyH := NewKeyHandler(ks)
-	usersH := NewUserHandler(us)
+	usersH := NewUserHandler(us, ss)
 
 	r := chi.NewRouter()
 	r.Use(middleware.SessionMiddleware(ss, us))

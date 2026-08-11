@@ -13,11 +13,12 @@ import (
 )
 
 type UserHandler struct {
-	users *user.Store
+	users    *user.Store
+	sessions *auth.SessionStore
 }
 
-func NewUserHandler(users *user.Store) *UserHandler {
-	return &UserHandler{users: users}
+func NewUserHandler(users *user.Store, sessions *auth.SessionStore) *UserHandler {
+	return &UserHandler{users: users, sessions: sessions}
 }
 
 func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +77,12 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Status != "" {
 		h.users.UpdateStatus(id, req.Status)
+		if req.Status == "disabled" {
+			// 禁用账户:立即撤销其所有会话
+			if h.sessions != nil {
+				h.sessions.RevokeAllForUser(id)
+			}
+		}
 	}
 	JSON(w, 200, map[string]string{"status": "ok"})
 }

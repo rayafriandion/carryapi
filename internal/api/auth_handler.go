@@ -180,6 +180,8 @@ func (h *AuthHandler) Disable2FA(w http.ResponseWriter, r *http.Request) {
 			h.users.DeleteAuthMethod(m.ID, u.ID)
 		}
 	}
+	// 禁用 2FA 后撤销该账户所有会话(2FA 已不再保护这些会话)
+	h.sessions.RevokeAllForUser(u.ID)
 	JSON(w, 200, map[string]string{"status": "ok"})
 }
 

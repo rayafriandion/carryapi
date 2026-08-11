@@ -46,7 +46,7 @@ func main() {
 	ks := apikey.New(d)
 	ls := auth.NewLoginService(us, ss, st)
 	authH := api.NewAuthHandler(ls, ss, us, st)
-	usersH := api.NewUserHandler(us)
+	usersH := api.NewUserHandler(us, ss)
 	keysH := api.NewKeyHandler(ks)
 	quotasH := api.NewQuotaHandler(us)
 	settingsH := api.NewSettingsHandler(st)

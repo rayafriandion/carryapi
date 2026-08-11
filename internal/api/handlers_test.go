@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -189,7 +191,7 @@ func TestDisable2FARequiresPassword(t *testing.T) {
 
 func TestUserCreateAsAdmin(t *testing.T) {
 	f := setupAPI(t)
-	uh := NewUserHandler(f.users)
+	uh := NewUserHandler(f.users, f.sessions)
 	// 注入 admin 用户到 context(admin 仅存在于 context,不在 DB,所以 List 只看到新建的 user)
 	admin := &user.User{ID: 1, Email: "admin@x.com", Role: "admin", Status: "active"}
 	body, _ := json.Marshal(map[string]string{"email": "newuser@x.com", "password": "pw", "role": "user"})
@@ -215,7 +217,7 @@ func TestUserCreateAsAdmin(t *testing.T) {
 
 func TestUserDeletePreventsSelf(t *testing.T) {
 	f := setupAPI(t)
-	uh := NewUserHandler(f.users)
+	uh := NewUserHandler(f.users, f.sessions)
 	admin := &user.User{ID: 1, Email: "admin@x.com", Role: "admin", Status: "active"}
 	req := httptest.NewRequest("DELETE", "/api/users/1", nil)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
@@ -225,6 +227,66 @@ func TestUserDeletePreventsSelf(t *testing.T) {
 	uh.Delete(rec, req)
 	if rec.Code != 400 {
 		t.Errorf("deleting self should be 400, got %d", rec.Code)
+	}
+}
+
+func TestUserDisableRevokesSessions(t *testing.T) {
+	f := setupAPI(t)
+	uh := NewUserHandler(f.users, f.sessions)
+	// 建一个真实用户并创建会话
+	u, _ := f.users.Create("victim@x.com", "h", "user")
+	sess, err := f.sessions.Create(u.ID, 7*24*time.Hour, "", "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := f.sessions.Lookup(sess.Token); err != nil {
+		t.Fatalf("session should be valid: %v", err)
+	}
+	// admin 禁用该用户
+	admin := &user.User{ID: 999, Email: "admin@x.com", Role: "admin", Status: "active"}
+	body, _ := json.Marshal(map[string]string{"status": "disabled"})
+	req := httptest.NewRequest("PUT", "/api/users/2", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	req = withChiParam(req, "id", strconv.FormatInt(u.ID, 10))
+	rec := httptest.NewRecorder()
+	uh.Update(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("update code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 该用户的会话应全部撤销
+	if _, err := f.sessions.Lookup(sess.Token); err == nil {
+		t.Error("session should be revoked after user disabled")
+	}
+	got, _ := f.users.GetByID(u.ID)
+	if got.Status != "disabled" {
+		t.Errorf("user status = %q, want disabled", got.Status)
+	}
+}
+
+func TestDisable2FARevokesSessions(t *testing.T) {
+	f := setupAPI(t)
+	hash, _ := auth.HashPassword("pw123")
+	u, _ := f.users.Create("2farevoke@x.com", hash, "user")
+	f.users.AddAuthMethod(u.ID, "totp", "", []byte("secret"))
+	// 为该用户建一个会话
+	sess, _ := f.sessions.Create(u.ID, 7*24*time.Hour, "", "")
+	if _, err := f.sessions.Lookup(sess.Token); err != nil {
+		t.Fatalf("session should be valid: %v", err)
+	}
+	authH := NewAuthHandler(f.ls, f.sessions, f.users, f.settings)
+	body, _ := json.Marshal(map[string]string{"password": "pw123"})
+	req := httptest.NewRequest("POST", "/api/auth/2fa/disable", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, &user.User{ID: u.ID, Email: u.Email, PasswordHash: hash, Role: "user", Status: "active"}))
+	rec := httptest.NewRecorder()
+	authH.Disable2FA(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("disable 2fa code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 禁用 2FA 后会话应被撤销
+	if _, err := f.sessions.Lookup(sess.Token); err == nil {
+		t.Error("session should be revoked after 2fa disable")
 	}
 }
 

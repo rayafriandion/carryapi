@@ -192,3 +192,20 @@ func TestHandlerLogsInvalidUserID(t *testing.T) {
 		t.Errorf("code=%d, want 400 (invalid user_id)", rec.Code)
 	}
 }
+
+// TestHandlerSummaryAdminUserFilter admin 传 user_id=1 应只统计该用户。
+func TestHandlerSummaryAdminUserFilter(t *testing.T) {
+	h, _ := newHandler(t)
+	req := httptest.NewRequest("GET", "/api/stats/summary?user_id=1", nil)
+	req = req.WithContext(ctxUser(1, "admin"))
+	rec := httptest.NewRecorder()
+	h.Summary(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var s Summary
+	json.Unmarshal(rec.Body.Bytes(), &s)
+	if s.TotalRequests != 3 {
+		t.Errorf("TotalRequests = %d, want 3 (user 1 only)", s.TotalRequests)
+	}
+}

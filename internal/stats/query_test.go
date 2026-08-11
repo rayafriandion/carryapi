@@ -239,6 +239,43 @@ func TestQuerySuccessRateByProvider(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2 (providers 1,2)", len(rows))
 	}
+	// provider 分组:my-gpt4 -> provider 1(3 成功);my-claude -> provider 2(1 失败)。
+	// Group 是 COALESCE(up.name) = 'openai' / 'anthropic'。
+	byName := map[string]SuccessStat{}
+	for _, r := range rows {
+		byName[r.Group] = r
+	}
+	openai := byName["openai"]
+	if openai.Total != 3 || openai.Success != 3 || openai.Failed != 0 || openai.SuccessRate != 100.0 {
+		t.Errorf("openai stat = %+v, want Total=3 Success=3 Failed=0 Rate=100", openai)
+	}
+	anthropic := byName["anthropic"]
+	if anthropic.Total != 1 || anthropic.Success != 0 || anthropic.Failed != 1 || anthropic.SuccessRate != 0.0 {
+		t.Errorf("anthropic stat = %+v, want Total=1 Success=0 Failed=1 Rate=0", anthropic)
+	}
+}
+
+// TestQueryLogsPageSizeCap 验证 PageSize 上限 200。
+func TestQueryLogsPageSizeCap(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	f := LogFilter{
+		Start: time.Now().Add(-24 * time.Hour), End: time.Now(), Page: 1, PageSize: 1000,
+	}
+	f.normalize()
+	if f.PageSize != 200 {
+		t.Errorf("normalized PageSize = %d, want 200", f.PageSize)
+	}
+	total, items, err := QueryLogs(d, f)
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if total != 4 {
+		t.Errorf("total = %d, want 4", total)
+	}
+	if len(items) != 4 {
+		t.Errorf("items = %d, want 4 (only 4 rows; cap still returns all available)", len(items))
+	}
 }
 
 func TestQueryLogsPagination(t *testing.T) {

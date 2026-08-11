@@ -1,16 +1,6 @@
-import { createApp, h } from 'vue'
-import { NMessageProvider, NCard, NConfigProvider } from 'naive-ui'
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import App from './App.vue'
+import router from './router'
 
-const App = {
-  render() {
-    return h(NConfigProvider, null, {
-      default: () => h(NMessageProvider, null, {
-        default: () => h(NCard, { title: 'carryAPI' }, {
-          default: () => 'carryAPI management console - coming soon'
-        })
-      })
-    })
-  }
-}
-
-createApp(App).mount('#app')
+createApp(App).use(createPinia()).use(router).mount('#app')

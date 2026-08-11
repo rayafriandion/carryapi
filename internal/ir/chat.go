@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // ---- 请求:下游 Chat JSON -> IR ----
@@ -527,13 +528,17 @@ func (e *ChatStreamEncoder) Encode(ev Event) ([][]byte, error) {
 		if ev.ToolCall == nil {
 			return nil, fmt.Errorf("tool call delta without ToolCall")
 		}
+		id := ev.ToolCall.ID
+		if id == "" {
+			// 跨协议流(Anthropic/Responses 增量只带参数)缺少 id 时合成一个,
+			// OpenAI 要求 tool_calls delta 带 id + type。
+			id = "call_" + strconv.Itoa(e.toolCallIndex+1)
+		}
 		tc := map[string]any{
+			"id":       id,
+			"type":     "function",
 			"index":    e.toolCallIndex,
 			"function": map[string]string{"name": ev.ToolCall.Name, "arguments": ev.ToolCall.Arguments},
-		}
-		if ev.ToolCall.ID != "" {
-			tc["id"] = ev.ToolCall.ID
-			tc["type"] = "function"
 		}
 		e.toolCallIndex++
 		chunk := map[string]any{

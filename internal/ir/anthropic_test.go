@@ -122,6 +122,46 @@ func TestDecodeAnthropicRequestToolResultIsError(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamEncoderToolBlockStart(t *testing.T) {
+	// I2 回归:tool 增量序列首条 delta 前先发 content_block_start(tool_use),
+	// 后续增量只发 content_block_delta(input_json_delta)。
+	e := &AnthropicStreamEncoder{}
+	lines, err := e.Encode(Event{Type: EventToolCallDelta, ToolCall: &ToolCall{
+		Type: "function", Name: "get_weather", Arguments: `{"ci`,
+	}})
+	if err != nil {
+		t.Fatalf("encode tool delta: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("first tool delta should produce 2 lines (start + delta), got %d", len(lines))
+	}
+	if !bytes.Contains(lines[0], []byte(`"content_block_start"`)) || !bytes.Contains(lines[0], []byte(`"tool_use"`)) {
+		t.Errorf("start line = %s", lines[0])
+	}
+	if !bytes.Contains(lines[0], []byte(`"name":"get_weather"`)) || !bytes.Contains(lines[0], []byte(`"id":"toolu_1"`)) {
+		t.Errorf("start line missing name/id: %s", lines[0])
+	}
+	if !bytes.Contains(lines[1], []byte(`"input_json_delta"`)) || !bytes.Contains(lines[1], []byte(`"{\"ci"`)) {
+		t.Errorf("delta line = %s", lines[1])
+	}
+	// 同一 tool 块的后续增量:只发 content_block_delta,不再发 start
+	lines, _ = e.Encode(Event{Type: EventToolCallDelta, ToolCall: &ToolCall{
+		Type: "function", Arguments: `ty":"beijing"}`,
+	}})
+	if len(lines) != 1 || !bytes.Contains(lines[0], []byte(`"input_json_delta"`)) {
+		t.Errorf("second delta should be 1 input_json_delta line: %d lines", len(lines))
+	}
+	if bytes.Contains(lines[0], []byte(`"content_block_start"`)) {
+		t.Errorf("duplicate content_block_start: %s", lines[0])
+	}
+	// 文本增量开启新块,下一个 tool 增量重新发 start
+	e.Encode(Event{Type: EventContentDelta, Delta: "text"})
+	lines, _ = e.Encode(Event{Type: EventToolCallDelta, ToolCall: &ToolCall{Type: "function", Arguments: `{"a"`}})
+	if len(lines) != 2 || !bytes.Contains(lines[0], []byte(`"content_block_start"`)) {
+		t.Errorf("tool delta after text should restart block: %d lines", len(lines))
+	}
+}
+
 func TestDecodeAnthropicRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "claude-3-5-sonnet-20241022",

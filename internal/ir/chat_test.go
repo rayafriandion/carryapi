@@ -64,6 +64,37 @@ func TestEncodeChatRequestToolResultPartMultiBlock(t *testing.T) {
 	}
 }
 
+func TestChatStreamEncoderToolDeltaSyntheticID(t *testing.T) {
+	// I2 回归:无 id 的跨协议 tool delta 编码为 OpenAI 要求的 id + type:function。
+	e := &ChatStreamEncoder{}
+	lines, err := e.Encode(Event{Type: EventToolCallDelta, ToolCall: &ToolCall{
+		Type: "function", Arguments: `{"city"`,
+	}})
+	if err != nil {
+		t.Fatalf("encode tool delta: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("tool delta should produce 1 line, got %d", len(lines))
+	}
+	if !bytes.Contains(lines[0], []byte(`"type":"function"`)) {
+		t.Errorf("missing type:function: %s", lines[0])
+	}
+	if !bytes.Contains(lines[0], []byte(`"id":"call_1"`)) {
+		t.Errorf("missing synthetic id call_1: %s", lines[0])
+	}
+	// 第二条增量使用已有 id 时原样保留
+	e2 := &ChatStreamEncoder{}
+	lines, _ = e2.Encode(Event{Type: EventToolCallDelta, ToolCall: &ToolCall{
+		ID: "call_x", Type: "function", Arguments: `{"city"`,
+	}})
+	if !bytes.Contains(lines[0], []byte(`"id":"call_x"`)) {
+		t.Errorf("existing id not preserved: %s", lines[0])
+	}
+	if !bytes.Contains(lines[0], []byte(`"type":"function"`)) {
+		t.Errorf("type:function always required: %s", lines[0])
+	}
+}
+
 func TestDecodeChatRequestBasic(t *testing.T) {
 	body := []byte(`{
 		"model": "gpt-4o",

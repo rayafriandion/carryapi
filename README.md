@@ -31,13 +31,13 @@ GOOS=windows GOARCH=amd64 go build -o carryapi-windows-amd64.exe ./cmd/carryapi
 ./carryapi
 ```
 
-默认监听 `0.0.0.0:8080`(广播开,其他设备可访问)。数据文件 `./carryapi.db`,主密钥 `./carryapi.key`(首次自动生成)。
+默认监听 `0.0.0.0:8067`(广播开,其他设备可访问)。数据文件 `./carryapi.db`,主密钥 `./carryapi.key`(首次自动生成)。
 
 ### 环境变量
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `CARRYAPI_PORT` | 8080 | 监听端口 |
+| `CARRYAPI_PORT` | 8067 | 监听端口 |
 | `CARRYAPI_DB_PATH` | ./carryapi.db | 数据库路径 |
 | `CARRYAPI_MASTER_KEY` | (自动生成) | 敏感字段加密主密钥,32 字节 |
 
@@ -108,7 +108,7 @@ OAuth 提供方通过以下 `settings` 表键配置(未设置或未完整设置�
 调用示例(Chat):
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:8067/v1/chat/completions \
   -H "Authorization: Bearer carry-xxxx..." \
   -H "Content-Type: application/json" \
   -d '{"model":"my-gpt4","messages":[{"role":"user","content":"hi"}]}'
@@ -117,7 +117,7 @@ curl http://localhost:8080/v1/chat/completions \
 模型列表:
 
 ```bash
-curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8080/v1/models
+curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8067/v1/models
 ```
 
 上游供应商、模型与定价由管理员通过管理 API 配置:`/api/providers`、`/api/models`、`/api/models/{id}/price`。上游协议(openai_chat / openai_responses / anthropic)与客户端使用的下游协议可任意组合,由代理自动转换。
@@ -145,7 +145,7 @@ curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8080/v1/models
 
 ## 管理后台
 
-访问 `http://<host>:8080/` 进入 Vue 3 + Naive UI 管理后台。功能按角色显示:
+访问 `http://<host>:8067/` 进入 Vue 3 + Naive UI 管理后台。功能按角色显示:
 
 | 页面 | 功能 | 权限 |
 |------|------|------|
@@ -174,7 +174,7 @@ cd web && npm run dev
 go run ./cmd/carryapi
 ```
 
-前端开发服务器把 `/api` 和 `/v1` 代理到后端 `127.0.0.1:8080`。
+前端开发服务器把 `/api` 和 `/v1` 代理到后端 `127.0.0.1:8067`。
 
 ## 测试
 

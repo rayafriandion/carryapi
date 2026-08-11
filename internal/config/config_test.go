@@ -37,8 +37,8 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.Port != 8080 {
-		t.Errorf("default Port = %d, want 8080", cfg.Port)
+	if cfg.Port != 8067 {
+		t.Errorf("default Port = %d, want 8067", cfg.Port)
 	}
 	if cfg.DBPath != "./carryapi.db" {
 		t.Errorf("default DBPath = %q, want ./carryapi.db", cfg.DBPath)

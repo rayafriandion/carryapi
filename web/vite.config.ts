@@ -11,8 +11,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8080',
-      '/v1': 'http://127.0.0.1:8080',
+      '/api': 'http://127.0.0.1:8067',
+      '/v1': 'http://127.0.0.1:8067',
     },
   },
   build: {

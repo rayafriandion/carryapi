@@ -25,7 +25,7 @@ type Service struct {
 	sessions map[string]*webauthn.SessionData
 }
 
-// New 构造 Service。rpID 是 Relying Party 域(如 "localhost"),rpOrigin 是完整 origin(如 "http://localhost:8080")。
+// New 构造 Service。rpID 是 Relying Party 域(如 "localhost"),rpOrigin 是完整 origin(如 "http://localhost:8067")。
 func New(rpID, rpOrigin string) (*Service, error) {
 	w, err := webauthn.New(&webauthn.Config{
 		RPDisplayName: "carryAPI",

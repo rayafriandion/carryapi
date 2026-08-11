@@ -62,7 +62,7 @@ func main() {
 	catalogH := catalog.NewHandler(catProv, catModel, catPrice)
 
 	// WebAuthn (passkey) Relying Party config. Defaults target local dev
-	// (localhost:8080); override via env for production deployments.
+	// (localhost:8067); override via env for production deployments.
 	rpID := os.Getenv("CARRYAPI_RP_ID")
 	if rpID == "" {
 		rpID = "localhost"

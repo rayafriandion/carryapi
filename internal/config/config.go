@@ -16,7 +16,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:   8080,
+		Port:   8067,
 		DBPath: "./carryapi.db",
 	}
 	if v := os.Getenv("CARRYAPI_PORT"); v != "" {

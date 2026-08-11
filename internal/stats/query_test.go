@@ -120,6 +120,34 @@ func TestQuerySummaryUserFilter(t *testing.T) {
 	}
 }
 
+func TestQueryTrendDay(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	points, err := QueryTrend(d, QueryParams{Start: time.Now().UTC().Add(-24 * time.Hour), End: time.Now().UTC()}, GranularityDay)
+	if err != nil {
+		t.Fatalf("QueryTrend: %v", err)
+	}
+	if len(points) == 0 {
+		t.Fatal("no trend points")
+	}
+	// 所有样本都在今天 -> 应合并为 1 个桶(4 请求)
+	if points[len(points)-1].Requests != 4 {
+		t.Errorf("last bucket requests = %d, want 4", points[len(points)-1].Requests)
+	}
+}
+
+func TestQueryTrendHour(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	points, err := QueryTrend(d, QueryParams{Start: time.Now().UTC().Add(-2 * time.Hour), End: time.Now().UTC()}, GranularityHour)
+	if err != nil {
+		t.Fatalf("QueryTrend: %v", err)
+	}
+	if len(points) == 0 {
+		t.Fatal("no hour points")
+	}
+}
+
 func TestQuerySummaryTimeRange(t *testing.T) {
 	d := newDB(t)
 	seedLogs(t, d)

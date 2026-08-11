@@ -139,6 +139,55 @@ func QuerySummary(db *sql.DB, p QueryParams) (*Summary, error) {
 	return s, nil
 }
 
+// TrendGranularity 粒度:day=按天, hour=按小时。
+type TrendGranularity string
+
+const (
+	GranularityDay  TrendGranularity = "day"
+	GranularityHour TrendGranularity = "hour"
+)
+
+// TrendPoint 一个时间桶的统计。
+type TrendPoint struct {
+	Bucket       string // "2026-08-10" 或 "2026-08-10T15"
+	Requests     int64
+	SuccessCount int64
+	InputTok     int64
+	OutputTok    int64
+	Cost         float64
+}
+
+// QueryTrend 按粒度返回时间段内各桶的统计。
+// SQLite 用 strftime('%Y-%m-%d', created_at) 按天、strftime('%Y-%m-%dT%H', created_at) 按小时。
+func QueryTrend(db *sql.DB, p QueryParams, g TrendGranularity) ([]TrendPoint, error) {
+	format := "%Y-%m-%d"
+	if g == GranularityHour {
+		format = "%Y-%m-%dT%H"
+	}
+	clause, args := whereClause(p)
+	query := `SELECT strftime('` + format + `', created_at) AS bucket,
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status_code BETWEEN 200 AND 299 AND error_type='none' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cost), 0)
+		FROM request_logs ` + clause + ` GROUP BY bucket ORDER BY bucket ASC`
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query trend: %w", err)
+	}
+	defer rows.Close()
+	var out []TrendPoint
+	for rows.Next() {
+		var tp TrendPoint
+		if err := rows.Scan(&tp.Bucket, &tp.Requests, &tp.SuccessCount, &tp.InputTok, &tp.OutputTok, &tp.Cost); err != nil {
+			return nil, err
+		}
+		out = append(out, tp)
+	}
+	return out, rows.Err()
+}
+
 // userClause 返回附加的 user 过滤子句(仅当 UserID 非空)。
 func userClause(p QueryParams) string {
 	if p.UserID != nil {

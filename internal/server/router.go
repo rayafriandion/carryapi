@@ -31,7 +31,22 @@ func (s *Server) buildRouter() http.Handler {
 				r.Get("/me", deps.Auth.Me)
 				r.Post("/2fa/setup", deps.Auth.Setup2FA)
 				r.Post("/2fa/disable", deps.Auth.Disable2FA)
+				// Passkey registration requires a logged-in user (binds the new
+				// credential to the account). CSRF is intentionally NOT applied
+				// here: the WebAuthn finish request body is the authenticator's
+				// CBOR/JSON attestation, which cannot carry a CSRF token, and
+				// the ceremony is itself bound to the BeginRegistration session.
+				if deps.Passkey != nil {
+					r.Post("/passkey/register/begin", deps.Passkey.RegisterBegin)
+					r.Post("/passkey/register/finish", deps.Passkey.RegisterFinish)
+				}
 			})
+			// Passkey login is public (no session yet): the client supplies the
+			// email so the server can look up the account + credentials.
+			if deps.Passkey != nil {
+				r.Post("/passkey/login/begin", deps.Passkey.LoginBegin)
+				r.Post("/passkey/login/finish", deps.Passkey.LoginFinish)
+			}
 			// OAuth begin/callback are public (no RequireLogin): the user is
 			// authenticating via the provider, so no session exists yet.
 			if deps.OAuth != nil {

@@ -21,6 +21,7 @@ import (
 	"carryapi/internal/server"
 	"carryapi/internal/settings"
 	"carryapi/internal/user"
+	"carryapi/internal/webauthn"
 )
 
 func main() {
@@ -51,6 +52,22 @@ func main() {
 	settingsH := api.NewSettingsHandler(st)
 	oauthH := api.NewOAuthHandler(us, ss, st)
 
+	// WebAuthn (passkey) Relying Party config. Defaults target local dev
+	// (localhost:8080); override via env for production deployments.
+	rpID := os.Getenv("CARRYAPI_RP_ID")
+	if rpID == "" {
+		rpID = "localhost"
+	}
+	rpOrigin := os.Getenv("CARRYAPI_RP_ORIGIN")
+	if rpOrigin == "" {
+		rpOrigin = fmt.Sprintf("http://localhost:%d", cfg.Port)
+	}
+	passkeySvc, err := webauthn.New(rpID, rpOrigin)
+	if err != nil {
+		log.Fatalf("webauthn init: %v", err)
+	}
+	passkeyH := api.NewPasskeyHandler(passkeySvc, us, ss)
+
 	// 首次启动:若无 admin 则创建
 	bootstrapAdmin(d, us)
 
@@ -65,6 +82,7 @@ func main() {
 		Quotas:   quotasH,
 		Settings: settingsH,
 		OAuth:    oauthH,
+		Passkey:  passkeyH,
 	})
 
 	// 信号处理

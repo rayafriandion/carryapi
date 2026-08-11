@@ -168,3 +168,15 @@ func TestHandlerSummaryLocalTimezoneRange(t *testing.T) {
 		t.Errorf("TotalRequests = %d, want 4 (default range must cover UTC-stored data regardless of server tz)", s.TotalRequests)
 	}
 }
+
+// TestHandlerSummaryBadStartParam 无效 start 参数应返回 400 而非 401。
+func TestHandlerSummaryBadStartParam(t *testing.T) {
+	h, _ := newHandler(t)
+	req := httptest.NewRequest("GET", "/api/stats/summary?start=not-a-time", nil)
+	req = req.WithContext(ctxUser(1, "admin"))
+	rec := httptest.NewRecorder()
+	h.Summary(rec, req)
+	if rec.Code != 400 {
+		t.Errorf("code=%d, want 400 (bad param, not 401)", rec.Code)
+	}
+}

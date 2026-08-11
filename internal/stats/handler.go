@@ -3,6 +3,7 @@ package stats
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,6 +12,9 @@ import (
 	"carryapi/internal/middleware"
 	"carryapi/internal/user"
 )
+
+// errUnauthorized 表示请求没有经过身份验证的用户。
+var errUnauthorized = errors.New("unauthorized")
 
 type Handler struct {
 	db *sql.DB
@@ -43,7 +47,7 @@ func currentUser(r *http.Request) *user.User {
 func (h *Handler) params(r *http.Request) (QueryParams, error) {
 	u := currentUser(r)
 	if u == nil {
-		return QueryParams{}, fmt.Errorf("unauthorized")
+		return QueryParams{}, errUnauthorized
 	}
 	start, end, err := parseTimeRange(r)
 	if err != nil {
@@ -65,6 +69,15 @@ func (h *Handler) params(r *http.Request) (QueryParams, error) {
 		p.UserID = &uid
 	}
 	return p, nil
+}
+
+// writeParamsErr 根据参数解析错误区分 401(未认证)与 400(参数错误)。
+func writeParamsErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, errUnauthorized) {
+		writeErr(w, 401, "unauthorized")
+		return
+	}
+	writeErr(w, 400, err.Error())
 }
 
 func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
@@ -92,7 +105,7 @@ func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	p, err := h.params(r)
 	if err != nil {
-		writeErr(w, 401, "unauthorized")
+		writeParamsErr(w, err)
 		return
 	}
 	s, err := QuerySummary(h.db, p)
@@ -106,7 +119,7 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Trend(w http.ResponseWriter, r *http.Request) {
 	p, err := h.params(r)
 	if err != nil {
-		writeErr(w, 401, "unauthorized")
+		writeParamsErr(w, err)
 		return
 	}
 	g := TrendGranularity(r.URL.Query().Get("granularity"))
@@ -128,7 +141,7 @@ func (h *Handler) Trend(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Cost(w http.ResponseWriter, r *http.Request) {
 	p, err := h.params(r)
 	if err != nil {
-		writeErr(w, 401, "unauthorized")
+		writeParamsErr(w, err)
 		return
 	}
 	group := CostGroup(r.URL.Query().Get("group"))
@@ -146,7 +159,7 @@ func (h *Handler) Cost(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SuccessRate(w http.ResponseWriter, r *http.Request) {
 	p, err := h.params(r)
 	if err != nil {
-		writeErr(w, 401, "unauthorized")
+		writeParamsErr(w, err)
 		return
 	}
 	group := r.URL.Query().Get("group")

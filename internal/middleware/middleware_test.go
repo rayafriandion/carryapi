@@ -111,3 +111,34 @@ func TestRateLimit(t *testing.T) {
 		t.Errorf("blocked = %d, want 2 (max=2, 4 requests)", blocked)
 	}
 }
+
+func TestRateLimitHonorsXForwardedFor(t *testing.T) {
+	rl := RateLimit(2, time.Minute)
+	h := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	// 同一 XFF 的前 2 次放行,第 3 次被限;不同 XFF 互不影响。
+	blocked := 0
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "10.0.0.1:1234" // 代理地址,相同
+		req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			blocked++
+		}
+	}
+	if blocked != 1 {
+		t.Errorf("same XFF blocked = %d, want 1", blocked)
+	}
+	// 不同 XFF -> 新的配额
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusTooManyRequests {
+		t.Error("different XFF client should not be limited")
+	}
+}

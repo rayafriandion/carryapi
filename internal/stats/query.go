@@ -202,3 +202,122 @@ func userArgs(p QueryParams) []any {
 	}
 	return nil
 }
+
+type CostGroup string
+
+const (
+	CostByModel    CostGroup = "model"
+	CostByKey      CostGroup = "key"
+	CostByProvider CostGroup = "provider"
+)
+
+type CostRow struct {
+	Group     string
+	Requests  int64
+	TotalCost float64
+}
+
+func QueryCost(db *sql.DB, p QueryParams, group CostGroup) ([]CostRow, error) {
+	var selectExpr, groupExpr string
+	switch group {
+	case CostByModel:
+		selectExpr, groupExpr = "custom_model", "custom_model"
+	case CostByKey:
+		selectExpr, groupExpr = "COALESCE(ak.key_prefix,'?') || ' ' || COALESCE(ak.label,'')", "rl.api_key_id"
+		// 需要 join,单独处理
+	case CostByProvider:
+		selectExpr, groupExpr = "COALESCE(up.name,'unknown')", "rl.provider_id"
+	default:
+		return nil, fmt.Errorf("unknown cost group %q", group)
+	}
+
+	clause, args := whereClause(p)
+	if group == CostByKey {
+		query := `SELECT ` + selectExpr + `, COUNT(*), COALESCE(SUM(rl.cost),0)
+			FROM request_logs rl LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
+			WHERE rl.created_at >= ? AND rl.created_at <= ?` + userClause(p) + `
+			AND rl.api_key_id IS NOT NULL GROUP BY rl.api_key_id ORDER BY COUNT(*) DESC`
+		args = append([]any{p.Start, p.End}, userArgs(p)...)
+		return queryCostRows(db, query, args)
+	}
+	if group == CostByProvider {
+		query := `SELECT ` + selectExpr + `, COUNT(*), COALESCE(SUM(rl.cost),0)
+			FROM request_logs rl LEFT JOIN upstream_providers up ON rl.provider_id = up.id
+			WHERE rl.created_at >= ? AND rl.created_at <= ?` + userClause(p) + `
+			AND rl.provider_id IS NOT NULL GROUP BY rl.provider_id ORDER BY COUNT(*) DESC`
+		args = append([]any{p.Start, p.End}, userArgs(p)...)
+		return queryCostRows(db, query, args)
+	}
+	query := `SELECT ` + selectExpr + `, COUNT(*), COALESCE(SUM(cost),0)
+		FROM request_logs ` + clause + ` GROUP BY ` + groupExpr + ` ORDER BY COUNT(*) DESC`
+	return queryCostRows(db, query, args)
+}
+
+func queryCostRows(db *sql.DB, query string, args []any) ([]CostRow, error) {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query cost: %w", err)
+	}
+	defer rows.Close()
+	var out []CostRow
+	for rows.Next() {
+		var r CostRow
+		if err := rows.Scan(&r.Group, &r.Requests, &r.TotalCost); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+type SuccessStat struct {
+	Group         string
+	Total         int64
+	Success       int64
+	Failed        int64
+	SuccessRate   float64
+	AvgDurationMs float64
+}
+
+// QuerySuccessRate 按维度返回成功率。
+// group 取值:"model" | "provider" | "key"。
+func QuerySuccessRate(db *sql.DB, p QueryParams, group string) ([]SuccessStat, error) {
+	var selectExpr, join, groupExpr string
+	switch group {
+	case "model":
+		selectExpr, join, groupExpr = "rl.custom_model", "", "rl.custom_model"
+	case "provider":
+		selectExpr, join, groupExpr = "COALESCE(up.name,'unknown')", "LEFT JOIN upstream_providers up ON rl.provider_id = up.id", "rl.provider_id"
+	case "key":
+		selectExpr, join, groupExpr = "COALESCE(ak.key_prefix,'?') || ' ' || COALESCE(ak.label,'')", "LEFT JOIN api_keys ak ON rl.api_key_id = ak.id", "rl.api_key_id"
+	default:
+		return nil, fmt.Errorf("unknown success group %q", group)
+	}
+
+	// 统一参数:时间范围 + 可选 user 过滤(普通用户查自己)
+	clause := "rl.created_at >= ? AND rl.created_at <= ?" + userClause(p)
+	args := append([]any{p.Start, p.End}, userArgs(p)...)
+
+	query := `SELECT ` + selectExpr + `, COUNT(*),
+		COALESCE(SUM(CASE WHEN rl.status_code BETWEEN 200 AND 299 AND rl.error_type='none' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN rl.status_code < 200 OR rl.status_code >= 300 OR rl.error_type != 'none' THEN 1 ELSE 0 END),0),
+		COALESCE(AVG(rl.duration_ms),0)
+		FROM request_logs rl ` + join + ` WHERE ` + clause + ` GROUP BY ` + groupExpr + ` ORDER BY COUNT(*) DESC`
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query success rate: %w", err)
+	}
+	defer rows.Close()
+	var out []SuccessStat
+	for rows.Next() {
+		var s SuccessStat
+		if err := rows.Scan(&s.Group, &s.Total, &s.Success, &s.Failed, &s.AvgDurationMs); err != nil {
+			return nil, err
+		}
+		if s.Total > 0 {
+			s.SuccessRate = float64(s.Success) / float64(s.Total) * 100
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}

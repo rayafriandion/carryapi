@@ -162,3 +162,58 @@ func TestQuerySummaryTimeRange(t *testing.T) {
 		t.Errorf("TotalRequests = %d, want 0 (outside range)", s.TotalRequests)
 	}
 }
+
+func TestQueryCostByModel(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	rows, err := QueryCost(d, QueryParams{Start: time.Now().Add(-24 * time.Hour), End: time.Now()}, CostByModel)
+	if err != nil {
+		t.Fatalf("QueryCost: %v", err)
+	}
+	// my-gpt4 cost=0.005+0.01+0.015=0.03; my-claude=0.003
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	for _, r := range rows {
+		if r.Group == "my-gpt4" && r.TotalCost != 0.03 {
+			t.Errorf("my-gpt4 cost = %f, want 0.03", r.TotalCost)
+		}
+	}
+}
+
+func TestQuerySuccessRateByModel(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	rows, err := QuerySuccessRate(d, QueryParams{Start: time.Now().Add(-24 * time.Hour), End: time.Now()}, "model")
+	if err != nil {
+		t.Fatalf("QuerySuccessRate: %v", err)
+	}
+	// my-gpt4: 3 成功 0 失败 -> 100%; my-claude: 0 成功 1 失败 -> 0%
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	for _, r := range rows {
+		if r.Group == "my-gpt4" {
+			if r.Total != 3 || r.Success != 3 || r.Failed != 0 || r.SuccessRate != 100.0 {
+				t.Errorf("my-gpt4 stat = %+v", r)
+			}
+		}
+		if r.Group == "my-claude" {
+			if r.Total != 1 || r.Success != 0 || r.Failed != 1 || r.SuccessRate != 0.0 {
+				t.Errorf("my-claude stat = %+v", r)
+			}
+		}
+	}
+}
+
+func TestQuerySuccessRateByProvider(t *testing.T) {
+	d := newDB(t)
+	seedLogs(t, d)
+	rows, err := QuerySuccessRate(d, QueryParams{Start: time.Now().Add(-24 * time.Hour), End: time.Now()}, "provider")
+	if err != nil {
+		t.Fatalf("QuerySuccessRate: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (providers 1,2)", len(rows))
+	}
+}

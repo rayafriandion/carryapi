@@ -1,25 +1,12 @@
 package catalog
 
 import (
-	"bytes"
 	"testing"
-
-	"carryapi/internal/crypto"
-	"carryapi/internal/db"
 )
 
 func newProviderStore(t *testing.T) *ProviderStore {
 	t.Helper()
-	d, err := db.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { d.Close() })
-	c, _ := crypto.New(bytes.Repeat([]byte{1}, 32))
-	return NewProviderStore(d, c)
+	return newCatalogFixture(t).providers
 }
 
 func TestCreateAndGet(t *testing.T) {

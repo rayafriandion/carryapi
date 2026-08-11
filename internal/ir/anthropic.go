@@ -283,3 +283,246 @@ func encodeAnthropicContent(parts []ContentPart) any {
 	}
 	return blocks
 }
+
+// ---- 响应:上游 Anthropic JSON -> IR ----
+
+type anthropicResponseRaw struct {
+	ID         string                     `json:"id"`
+	Model      string                     `json:"model"`
+	Content    []anthropicContentBlockRaw `json:"content"`
+	StopReason string                     `json:"stop_reason"`
+	Usage      struct {
+		InputTokens         int `json:"input_tokens"`
+		OutputTokens        int `json:"output_tokens"`
+		CacheCreationTokens int `json:"cache_creation_input_tokens"`
+		CacheReadTokens     int `json:"cache_read_input_tokens"`
+	} `json:"usage"`
+}
+
+func DecodeAnthropicResponse(body []byte) (*Response, error) {
+	var raw anthropicResponseRaw
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode anthropic response: %w", err)
+	}
+	r := &Response{ID: raw.ID, Model: raw.Model}
+	r.Usage = Usage{
+		InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens,
+		CacheCreationTokens: raw.Usage.CacheCreationTokens, CacheReadTokens: raw.Usage.CacheReadTokens,
+	}
+	ch := Choice{Index: 0, Role: "assistant", FinishReason: mapAnthropicStop(raw.StopReason)}
+	for _, b := range raw.Content {
+		switch b.Type {
+		case "text":
+			ch.Content = append(ch.Content, ContentPart{Type: "text", Text: b.Text})
+		case "tool_use":
+			args := string(b.Input)
+			if len(b.Input) > 0 && string(b.Input) != "null" {
+				var buf bytes.Buffer
+				if err := json.Compact(&buf, b.Input); err == nil {
+					args = buf.String()
+				}
+			}
+			ch.ToolCalls = append(ch.ToolCalls, ToolCall{
+				ID: b.ID, Type: "function", Name: b.Name, Arguments: args,
+			})
+		}
+	}
+	r.Choices = append(r.Choices, ch)
+	return r, nil
+}
+
+func mapAnthropicStop(stop string) string {
+	switch stop {
+	case "end_turn", "stop_sequence":
+		return "stop"
+	case "max_tokens":
+		return "length"
+	case "tool_use":
+		return "tool_calls"
+	default:
+		return stop
+	}
+}
+
+// ---- 响应:IR -> 下游 Anthropic JSON ----
+
+func EncodeAnthropicResponse(r *Response) ([]byte, error) {
+	out := map[string]any{
+		"id": r.ID, "type": "message", "role": "assistant", "model": r.Model,
+		"stop_reason": mapIRStopToAnthropic(r),
+	}
+	var blocks []any
+	for _, ch := range r.Choices {
+		for _, p := range ch.Content {
+			if p.Type == "text" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
+			}
+		}
+		for _, tc := range ch.ToolCalls {
+			var input any
+			json.Unmarshal([]byte(tc.Arguments), &input)
+			if input == nil {
+				input = map[string]any{}
+			}
+			blocks = append(blocks, map[string]any{
+				"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": input,
+			})
+		}
+	}
+	out["content"] = blocks
+	usage := map[string]any{
+		"input_tokens": r.Usage.InputTokens, "output_tokens": r.Usage.OutputTokens,
+		"cache_creation_input_tokens": r.Usage.CacheCreationTokens,
+		"cache_read_input_tokens":     r.Usage.CacheReadTokens,
+	}
+	out["usage"] = usage
+	return json.Marshal(out)
+}
+
+func mapIRStopToAnthropic(r *Response) string {
+	if len(r.Choices) == 0 {
+		return "end_turn"
+	}
+	switch r.Choices[0].FinishReason {
+	case "tool_calls":
+		return "tool_use"
+	case "length":
+		return "max_tokens"
+	default:
+		return "end_turn"
+	}
+}
+
+// ---- 流式:上游 Anthropic SSE data -> []Event ----
+
+type AnthropicStreamDecoder struct {
+	pendingUsage *Usage
+	stopReason   string
+}
+
+func (d *AnthropicStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
+	evType := SSEEventType(data)
+	switch evType {
+	case "message_start":
+		var v struct {
+			Message struct {
+				Usage struct {
+					InputTokens         int `json:"input_tokens"`
+					CacheCreationTokens int `json:"cache_creation_input_tokens"`
+					CacheReadTokens     int `json:"cache_read_input_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("decode message_start: %w", err)
+		}
+		d.pendingUsage = &Usage{
+			InputTokens:         v.Message.Usage.InputTokens,
+			CacheCreationTokens: v.Message.Usage.CacheCreationTokens,
+			CacheReadTokens:     v.Message.Usage.CacheReadTokens,
+		}
+		return nil, nil
+	case "content_block_delta":
+		var v struct {
+			Delta struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJSON string `json:"partial_json"`
+			} `json:"delta"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("decode content_block_delta: %w", err)
+		}
+		switch v.Delta.Type {
+		case "text_delta":
+			return []Event{{Type: EventContentDelta, Delta: v.Delta.Text}}, nil
+		case "input_json_delta":
+			return []Event{{Type: EventToolCallDelta, ToolCall: &ToolCall{Type: "function", Arguments: v.Delta.PartialJSON}}}, nil
+		}
+		return nil, nil
+	case "message_delta":
+		var v struct {
+			Delta struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("decode message_delta: %w", err)
+		}
+		d.stopReason = v.Delta.StopReason
+		if d.pendingUsage == nil {
+			d.pendingUsage = &Usage{}
+		}
+		d.pendingUsage.OutputTokens = v.Usage.OutputTokens
+		return nil, nil
+	case "message_stop":
+		finish := mapAnthropicStop(d.stopReason)
+		evs := []Event{{Type: EventDone, Finish: finish}}
+		if d.pendingUsage != nil {
+			evs = append(evs, Event{Type: EventUsage, Usage: d.pendingUsage})
+		}
+		// 重置状态
+		d.pendingUsage = nil
+		d.stopReason = ""
+		return evs, nil
+	default:
+		return nil, nil
+	}
+}
+
+// ---- 流式:[]Event -> 下游 Anthropic SSE 行 ----
+
+type AnthropicStreamEncoder struct {
+	blockIndex int
+}
+
+func (e *AnthropicStreamEncoder) Encode(ev Event) ([][]byte, error) {
+	switch ev.Type {
+	case EventContentDelta:
+		line := map[string]any{
+			"type":  "content_block_delta",
+			"index": e.blockIndex,
+			"delta": map[string]any{"type": "text_delta", "text": ev.Delta},
+		}
+		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	case EventToolCallDelta:
+		if ev.ToolCall == nil {
+			return nil, fmt.Errorf("tool call delta without ToolCall")
+		}
+		line := map[string]any{
+			"type":  "content_block_delta",
+			"index": e.blockIndex,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": ev.ToolCall.Arguments},
+		}
+		e.blockIndex++
+		return [][]byte{EncodeSSELine(mustJSON(line))}, nil
+	case EventDone:
+		stopReason := "end_turn"
+		switch ev.Finish {
+		case "length":
+			stopReason = "max_tokens"
+		case "tool_calls":
+			stopReason = "tool_use"
+		}
+		usage := map[string]any{"output_tokens": 0}
+		if ev.Usage != nil {
+			usage = map[string]any{"output_tokens": ev.Usage.OutputTokens}
+		}
+		deltaLine := map[string]any{
+			"type":  "message_delta",
+			"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
+			"usage": usage,
+		}
+		stopLine := map[string]any{"type": "message_stop"}
+		return [][]byte{
+			EncodeSSELine(mustJSON(deltaLine)),
+			EncodeSSELine(mustJSON(stopLine)),
+		}, nil
+	}
+	return nil, fmt.Errorf("unknown event type %d", ev.Type)
+}
+
+func (e *AnthropicStreamEncoder) Reset() { e.blockIndex = 0 }

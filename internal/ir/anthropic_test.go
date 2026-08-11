@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -110,5 +111,132 @@ func TestEncodeAnthropicRequest(t *testing.T) {
 	}
 	if m["max_tokens"] != float64(100) {
 		t.Errorf("max_tokens = %v", m["max_tokens"])
+	}
+}
+
+func TestDecodeAnthropicResponse(t *testing.T) {
+	body := []byte(`{
+		"id": "msg_1",
+		"model": "claude-3-5-sonnet-20241022",
+		"role": "assistant",
+		"content": [
+			{"type": "text", "text": "The weather is sunny."},
+			{"type": "tool_use", "id": "tu_1", "name": "get_weather", "input": {"city": "beijing"}}
+		],
+		"stop_reason": "tool_use",
+		"usage": {"input_tokens": 10, "output_tokens": 15, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 4}
+	}`)
+	r, err := DecodeAnthropicResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeAnthropicResponse: %v", err)
+	}
+	if r.ID != "msg_1" || r.Model != "claude-3-5-sonnet-20241022" {
+		t.Errorf("id/model = %q/%q", r.ID, r.Model)
+	}
+	if len(r.Choices) != 1 {
+		t.Fatalf("choices = %d", len(r.Choices))
+	}
+	ch := r.Choices[0]
+	if len(ch.Content) != 1 || ch.Content[0].Text != "The weather is sunny." {
+		t.Errorf("content = %+v", ch.Content)
+	}
+	if len(ch.ToolCalls) != 1 || ch.ToolCalls[0].Name != "get_weather" || ch.ToolCalls[0].Arguments != `{"city":"beijing"}` {
+		t.Errorf("tool calls = %+v", ch.ToolCalls)
+	}
+	if ch.FinishReason != "tool_calls" {
+		t.Errorf("finish = %q, want tool_calls", ch.FinishReason)
+	}
+	if r.Usage.InputTokens != 10 || r.Usage.CacheCreationTokens != 2 || r.Usage.CacheReadTokens != 4 {
+		t.Errorf("usage = %+v", r.Usage)
+	}
+}
+
+func TestEncodeAnthropicResponse(t *testing.T) {
+	r := &Response{
+		ID: "msg_1", Model: "claude-3-5-sonnet-20241022",
+		Choices: []Choice{{
+			Role:         "assistant",
+			Content:      []ContentPart{{Type: "text", Text: "hi"}},
+			ToolCalls:    []ToolCall{{ID: "tu_1", Type: "function", Name: "get_weather", Arguments: `{"city":"beijing"}`}},
+			FinishReason: "tool_calls",
+		}},
+		Usage: Usage{InputTokens: 3, OutputTokens: 2, CacheCreationTokens: 1},
+	}
+	out, err := EncodeAnthropicResponse(r)
+	if err != nil {
+		t.Fatalf("EncodeAnthropicResponse: %v", err)
+	}
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	if m["stop_reason"] != "tool_use" {
+		t.Errorf("stop_reason = %v", m["stop_reason"])
+	}
+	content := m["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content = %d blocks, want 2", len(content))
+	}
+	tu := content[1].(map[string]any)
+	if tu["type"] != "tool_use" || tu["name"] != "get_weather" {
+		t.Errorf("tool_use block = %+v", tu)
+	}
+	usage := m["usage"].(map[string]any)
+	if usage["cache_creation_input_tokens"] != float64(1) {
+		t.Errorf("cache_creation = %v", usage["cache_creation_input_tokens"])
+	}
+}
+
+func TestAnthropicStreamDecoder(t *testing.T) {
+	d := &AnthropicStreamDecoder{}
+	// message_start(input_tokens 记录)
+	evs, _ := d.DecodeLine([]byte(`{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}`))
+	if len(evs) != 0 {
+		t.Fatalf("message_start should emit nothing, got %+v", evs)
+	}
+	// content_block_delta text
+	evs, _ = d.DecodeLine([]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}`))
+	if len(evs) != 1 || evs[0].Type != EventContentDelta || evs[0].Delta != "Hel" {
+		t.Fatalf("text delta: %+v", evs)
+	}
+	// content_block_delta input_json
+	evs, _ = d.DecodeLine([]byte(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"ci"}}`))
+	if len(evs) != 1 || evs[0].Type != EventToolCallDelta {
+		t.Fatalf("input_json delta: %+v", evs)
+	}
+	// message_delta(output_tokens + stop_reason)
+	evs, _ = d.DecodeLine([]byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`))
+	if len(evs) != 0 {
+		t.Fatalf("message_delta should emit nothing, got %+v", evs)
+	}
+	// message_stop -> usage + done
+	evs, _ = d.DecodeLine([]byte(`{"type":"message_stop"}`))
+	hasDone, hasUsage := false, false
+	for _, ev := range evs {
+		if ev.Type == EventDone && ev.Finish == "stop" {
+			hasDone = true
+		}
+		if ev.Type == EventUsage && ev.Usage != nil && ev.Usage.InputTokens == 10 && ev.Usage.OutputTokens == 5 && ev.Usage.CacheCreationTokens == 2 {
+			hasUsage = true
+		}
+	}
+	if !hasDone || !hasUsage {
+		t.Errorf("message_stop events: %+v", evs)
+	}
+}
+
+func TestAnthropicStreamEncoder(t *testing.T) {
+	e := &AnthropicStreamEncoder{}
+	lines, _ := e.Encode(Event{Type: EventContentDelta, Delta: "Hel"})
+	if len(lines) != 1 || !bytes.Contains(lines[0], []byte(`"text_delta"`)) || !bytes.Contains(lines[0], []byte(`"Hel"`)) {
+		t.Errorf("delta line = %q", lines[0])
+	}
+	lines, _ = e.Encode(Event{Type: EventDone, Finish: "stop", Usage: &Usage{InputTokens: 10, OutputTokens: 5}})
+	if len(lines) != 2 {
+		t.Fatalf("done should produce 2 lines (message_delta + message_stop), got %d", len(lines))
+	}
+	if !bytes.Contains(lines[0], []byte(`"message_delta"`)) || !bytes.Contains(lines[0], []byte(`"output_tokens":5`)) {
+		t.Errorf("message_delta line = %s", lines[0])
+	}
+	if !bytes.Contains(lines[1], []byte(`"message_stop"`)) {
+		t.Errorf("message_stop line = %s", lines[1])
 	}
 }

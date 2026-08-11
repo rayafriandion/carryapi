@@ -27,8 +27,8 @@ type Deps struct {
 	Keys     *api.KeyHandler
 	Quotas   *api.QuotaHandler
 	Settings *api.SettingsHandler
-	// OAuth and Passkey handlers are added in Tasks 12/13 when those
-	// packages/types are introduced.
+	OAuth    *api.OAuthHandler
+	// Passkey handler is added in Task 13 when that package/type is introduced.
 }
 
 type Server struct {

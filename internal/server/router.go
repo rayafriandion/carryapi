@@ -32,6 +32,12 @@ func (s *Server) buildRouter() http.Handler {
 				r.Post("/2fa/setup", deps.Auth.Setup2FA)
 				r.Post("/2fa/disable", deps.Auth.Disable2FA)
 			})
+			// OAuth begin/callback are public (no RequireLogin): the user is
+			// authenticating via the provider, so no session exists yet.
+			if deps.OAuth != nil {
+				r.Get("/oauth/{provider}", deps.OAuth.Begin)
+				r.Get("/oauth/callback", deps.OAuth.Callback)
+			}
 		})
 	}
 

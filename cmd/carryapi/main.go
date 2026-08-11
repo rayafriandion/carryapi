@@ -49,6 +49,7 @@ func main() {
 	keysH := api.NewKeyHandler(ks)
 	quotasH := api.NewQuotaHandler(us)
 	settingsH := api.NewSettingsHandler(st)
+	oauthH := api.NewOAuthHandler(us, ss, st)
 
 	// 首次启动:若无 admin 则创建
 	bootstrapAdmin(d, us)
@@ -63,6 +64,7 @@ func main() {
 		Keys:     keysH,
 		Quotas:   quotasH,
 		Settings: settingsH,
+		OAuth:    oauthH,
 	})
 
 	// 信号处理

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -117,8 +118,8 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		providers = append(providers, m.Provider)
 	}
 	JSON(w, 200, map[string]any{
-		"user":          map[string]any{"id": u.ID, "email": u.Email, "role": u.Role, "status": u.Status},
-		"auth_methods":  providers,
+		"user":         map[string]any{"id": u.ID, "email": u.Email, "role": u.Role, "status": u.Status},
+		"auth_methods": providers,
 	})
 }
 
@@ -157,11 +158,21 @@ func (h *AuthHandler) Disable2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.Password != "" {
-		if !auth.VerifyPassword(req.Password, u.PasswordHash) {
-			JSONError(w, 401, "invalid password")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if errors.Is(err, io.EOF) {
+			JSONError(w, 401, "password required")
 			return
 		}
+		JSONError(w, 400, "invalid body")
+		return
+	}
+	if req.Password == "" {
+		JSONError(w, 401, "password required")
+		return
+	}
+	if !auth.VerifyPassword(req.Password, u.PasswordHash) {
+		JSONError(w, 401, "invalid password")
+		return
 	}
 	methods, _ := h.users.GetAuthMethods(u.ID)
 	for _, m := range methods {

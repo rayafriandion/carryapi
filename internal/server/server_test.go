@@ -68,3 +68,29 @@ func TestShutdown(t *testing.T) {
 		t.Errorf("Shutdown: %v", err)
 	}
 }
+
+func TestGatewayInfoLoopback(t *testing.T) {
+	s := newServer(t) // cfg.Port=0,Store 已设
+	s.deps.Store.Set("listen_host", "127.0.0.1")
+	req := httptest.NewRequest("GET", "/api/gateway/info", nil)
+	rec := httptest.NewRecorder()
+	s.handleGatewayInfo(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	if rec.Body.String() != `{"base_url":"http://127.0.0.1:0/v1"}`+"\n" {
+		t.Errorf("body=%q", rec.Body.String())
+	}
+}
+
+func TestGatewayInfoBroadcast(t *testing.T) {
+	s := newServer(t)
+	s.deps.Store.Set("listen_host", "0.0.0.0")
+	req := httptest.NewRequest("GET", "/api/gateway/info", nil)
+	req.Host = "example.com:8067"
+	rec := httptest.NewRecorder()
+	s.handleGatewayInfo(rec, req)
+	if rec.Body.String() != `{"base_url":"http://example.com:8067/v1"}`+"\n" {
+		t.Errorf("body=%q", rec.Body.String())
+	}
+}

@@ -20,7 +20,7 @@ bash scripts/run.sh          # Linux / macOS / git-bash
 bash scripts/dev.sh
 ```
 
-访问 `http://localhost:8067/`,用首次启动控制台打印的管理员密码登录。
+访问 `http://localhost:8067/`。首次启动(库中无管理员)时页面会自动进入「首次设置」向导,填写邮箱与密码创建首个 admin 账号后即可登录。
 
 
 ## 构建
@@ -66,12 +66,14 @@ GOOS=windows GOARCH=amd64 go build -o carryapi-windows-amd64.exe ./cmd/carryapi
 
 ### 首次启动管理员
 
-首次启动时自动创建管理员账号(检测到库中无 `admin` 角色用户时):
+默认通过网页「首次设置」向导创建首个 admin(访问 `http://localhost:8067/` 时自动进入)。若需脚本化自动创建,需**同时**设置以下两个环境变量(仅设其一无效):
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `CARRYAPI_ADMIN_EMAIL` | admin@carryapi.local | 管理员邮箱 |
-| `CARRYAPI_ADMIN_PASSWORD` | (随机生成) | 管理员密码;未设置时生成随机 16 字节(32 位十六进制)密码并打印到 stdout,请立即修改 |
+| `CARRYAPI_ADMIN_EMAIL` | — | 脚本化部署:自动创建管理员邮箱(需与密码同设) |
+| `CARRYAPI_ADMIN_PASSWORD` | — | 脚本化部署:自动创建管理员密码(需与邮箱同设) |
+
+首个 admin 身份不可被降级/禁用/删除;任何管理员不可降级/禁用/删除自己。
 
 ### 登录方式
 

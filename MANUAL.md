@@ -152,15 +152,25 @@ make build     # 仅构建
 首次启动(无 `carryapi.db` 时)自动:
 
 1. 创建数据库与全部表。
-2. 创建**管理员账号**,控制台打印密码:
-   ```
-   created admin admin@carryapi.local with password: xxxx (change it immediately)
-   ```
-3. 生成主密钥文件 `carryapi.key`(如未设置 `CARRYAPI_MASTER_KEY`)。
+2. 生成主密钥文件 `carryapi.key`(如未设置 `CARRYAPI_MASTER_KEY`)。
 
-用打印的账号(默认 `admin@carryapi.local`)与密码登录管理后台。**首次登录后建议立即开启 TOTP 两步验证**(账号设置页)。
+**首次启动不再自动创建管理员或打印随机密码。** 访问 `http://localhost:8067/` 时,由于库中尚无管理员,页面会自动进入**「首次设置」向导**,由你填写管理员邮箱与密码来创建首个 admin 账户。创建成功后用该账号登录管理后台。**首次登录后建议立即开启 TOTP 两步验证**(账号设置页)。
 
-可通过环境变量预设管理员(见下节),避免随机密码。
+### 脚本化部署
+
+若希望在无人值守环境自动创建管理员(不经过向导),需**同时**设置以下两个环境变量:
+
+- `CARRYAPI_ADMIN_EMAIL`
+- `CARRYAPI_ADMIN_PASSWORD`
+
+当且仅当两者都设置且库中无 admin 时,启动时自动创建管理员;否则一律交由网页向导处理。仅设置其一无效。
+
+### 管理员身份保护
+
+- 首个 admin(向导创建的那个初始管理员)账户不可被**降级**、**禁用**或**删除**。
+- 任何管理员都不可降级/禁用/删除**自己**。
+- 其他管理员之间可以互相调整角色(但不能动自己)。
+- 管理员可把其他用户设为管理员(用户管理页「角色」改为「管理员」)。
 
 ---
 
@@ -173,8 +183,8 @@ make build     # 仅构建
 | `CARRYAPI_PORT` | 8067 | 监听端口 |
 | `CARRYAPI_DB_PATH` | ./carryapi.db | SQLite 数据库文件路径 |
 | `CARRYAPI_MASTER_KEY` | 自动生成到 carryapi.key | 敏感字段加密主密钥,32 字节 |
-| `CARRYAPI_ADMIN_EMAIL` | admin@carryapi.local | 首次启动管理员邮箱 |
-| `CARRYAPI_ADMIN_PASSWORD` | 随机生成 | 首次启动管理员密码 |
+| `CARRYAPI_ADMIN_EMAIL` | — | 脚本化部署:自动创建管理员邮箱(需与密码同设) |
+| `CARRYAPI_ADMIN_PASSWORD` | — | 脚本化部署:自动创建管理员密码(需与邮箱同设) |
 | `CARRYAPI_RP_ID` | localhost | WebAuthn Passkey 的 Relying Party 域 |
 | `CARRYAPI_RP_ORIGIN` | http://localhost:{port} | WebAuthn origin(公网部署需改) |
 
@@ -339,7 +349,7 @@ curl http://localhost:8067/api/health
 用 `CARRYAPI_PORT=其他端口` 或 `scripts/run.sh 其他端口` 指定。
 
 **Q: 不知道管理员密码?**
-删除 `carryapi.db` 重新启动(会重建库并打印新管理员密码);或设置 `CARRYAPI_ADMIN_EMAIL`/`CARRYAPI_ADMIN_PASSWORD` 预设。
+删除 `carryapi.db`(连同 `carryapi.db-wal`/`carryapi.db-shm`)后重新启动,访问网页会重新进入「首次设置」向导,由你重新设置管理员邮箱与密码(会清空全部数据)。
 
 **Q: 前端打不开 / 空白?**
 确认访问的是单二进制(`go build` 后运行)而非仅后端。生产模式访问 `http://localhost:8067/`。

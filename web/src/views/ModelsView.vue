@@ -16,6 +16,7 @@
         <n-card>
           <div class="toolbar">
             <n-button type="primary" @click="openModelCreate">新建模型</n-button>
+            <n-button @click="openImportModal">从供应商导入</n-button>
           </div>
           <n-data-table :columns="modelColumns" :data="models" :loading="modelsLoading" :pagination="false" :bordered="false" />
         </n-card>
@@ -106,6 +107,29 @@
         </div>
       </template>
     </n-modal>
+
+    <!-- 导入弹窗 -->
+    <n-modal v-model:show="importShow" preset="card" title="从供应商导入模型" style="width: 560px">
+      <n-form>
+        <n-form-item label="供应商">
+          <n-select v-model:value="importProviderId" :options="providerOptions" placeholder="选择供应商" @update:value="onFetchModels" />
+        </n-form-item>
+        <div v-if="fetchedModels.length">
+          <n-checkbox-group v-model:value="importSelected">
+            <n-space vertical>
+              <n-checkbox v-for="m in fetchedModels" :key="m.name" :value="m.name" :disabled="m.exists">
+                {{ m.name }} <n-tag v-if="m.exists" size="small" type="warning">已存在</n-tag>
+              </n-checkbox>
+            </n-space>
+          </n-checkbox-group>
+        </div>
+        <n-empty v-else-if="importProviderId" description="点击上方供应商后获取模型列表" />
+      </n-form>
+      <template #footer>
+        <n-button @click="importShow = false">取消</n-button>
+        <n-button type="primary" :loading="importing" :disabled="!importSelected.length" @click="onImport">导入 ({{ importSelected.length }})</n-button>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -114,7 +138,7 @@ import { computed, onMounted, reactive, ref, h } from 'vue'
 import {
   NButton, NCard, NDataTable, NTabs, NTabPane, NForm, NFormItem, NInput,
   NInputNumber, NModal, NSelect, NDescriptions, NDescriptionsItem, NEmpty,
-  NSwitch, NPopconfirm, useMessage,
+  NSwitch, NPopconfirm, NCheckboxGroup, NCheckbox, NSpace, NTag, useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
 
@@ -140,10 +164,18 @@ const providerColumns = [
   { title: '协议', key: 'protocol' },
   { title: '状态', key: 'status' },
   {
+    title: '测试',
+    key: 'test',
+    render(row: any) {
+      return h('span', { class: row._testResult?.startsWith('可用') ? 'ok' : 'bad' }, row._testResult || '-')
+    },
+  },
+  {
     title: '操作',
     key: 'actions',
     render(row: any) {
       return h('div', { class: 'row-actions' }, [
+        h(NButton, { size: 'small', loading: row._testing, onClick: () => onProviderTest(row) }, { default: () => '测试' }),
         h(NButton, { size: 'small', onClick: () => openProviderEdit(row) }, { default: () => '编辑' }),
         h(NPopconfirm, { onPositiveClick: () => onProviderDelete(row) }, {
           trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
@@ -233,6 +265,20 @@ async function onProviderDelete(row: any) {
     loadProviders()
   } catch (e) {
     message.error(errorMessage(e))
+  }
+}
+async function onProviderTest(row: any) {
+  row._testing = true
+  try {
+    const res = await http.post(`/api/providers/${row.id}/test`)
+    const d = res.data || {}
+    row._testResult = d.ok
+      ? `可用 ${d.latency_ms}ms`
+      : `不可用: ${d.error || ''}`
+  } catch (e) {
+    row._testResult = '测试失败'
+  } finally {
+    row._testing = false
   }
 }
 
@@ -349,6 +395,47 @@ async function onModelDelete(row: any) {
   }
 }
 
+// ---- import from provider ----
+const importShow = ref(false)
+const importProviderId = ref<number | null>(null)
+const fetchedModels = ref<any[]>([])
+const importSelected = ref<string[]>([])
+const importing = ref(false)
+
+function openImportModal() {
+  importProviderId.value = null
+  fetchedModels.value = []
+  importSelected.value = []
+  importShow.value = true
+}
+async function onFetchModels() {
+  if (importProviderId.value == null) return
+  fetchedModels.value = []
+  importSelected.value = []
+  try {
+    const res = await http.get(`/api/providers/${importProviderId.value}/models/fetch`)
+    fetchedModels.value = res.data?.models || []
+  } catch (e) {
+    message.error(errorMessage(e))
+  }
+}
+async function onImport() {
+  if (!importProviderId.value) return
+  importing.value = true
+  try {
+    const items = importSelected.value.map((name) => ({ provider_id: importProviderId.value, upstream_model: name }))
+    const res = await http.post('/api/models/import', { items })
+    const d = res.data || {}
+    message.success(`导入 ${d.imported} 个,跳过 ${d.skipped} 个`)
+    importShow.value = false
+    loadModels()
+  } catch (e) {
+    message.error(errorMessage(e))
+  } finally {
+    importing.value = false
+  }
+}
+
 // ---- pricing ----
 const priceModelId = ref<number | null>(null)
 const priceModelName = computed(() => models.value.find((m) => m.id === priceModelId.value)?.name || '')
@@ -434,5 +521,11 @@ onMounted(async () => {
 .row-actions {
   display: flex;
   gap: 8px;
+}
+.ok {
+  color: #18a058;
+}
+.bad {
+  color: #d03050;
 }
 </style>

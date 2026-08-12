@@ -466,7 +466,8 @@ type chatStreamToolRaw struct {
 }
 
 func (d *ChatStreamDecoder) DecodeLine(data []byte) ([]Event, error) {
-	if string(data) == "[DONE]" {
+	// 容忍行尾空白(SSE 流可能带 CRLF,\r 会被 TrimSpace 剥离)
+	if string(bytes.TrimSpace(data)) == "[DONE]" {
 		return nil, nil
 	}
 	var chunk chatChunkRaw

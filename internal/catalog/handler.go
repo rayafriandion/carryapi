@@ -12,11 +12,14 @@ type Handler struct {
 	providers *ProviderStore
 	models    *ModelStore
 	prices    *PriceStore
+	prober    *Prober
 }
 
 func NewHandler(providers *ProviderStore, models *ModelStore, prices *PriceStore) *Handler {
-	return &Handler{providers: providers, models: models, prices: prices}
+	return &Handler{providers: providers, models: models, prices: prices, prober: NewProber(nil)}
 }
+
+func (h *Handler) SetProber(p *Prober) { h.prober = p }
 
 func jsonOut(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -108,6 +111,79 @@ func (h *Handler) DeleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOut(w, 200, map[string]string{"status": "ok"})
+}
+
+// FetchProviderModels 拉取某供应商的上游模型列表(不落库),标注是否已存在。
+func (h *Handler) FetchProviderModels(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	provider, err := h.providers.Get(id)
+	if err != nil {
+		jsonErr(w, 400, "provider not found")
+		return
+	}
+	names, err := h.prober.FetchModels(r.Context(), provider)
+	if err != nil {
+		jsonErr(w, 502, "failed to fetch models: "+err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		_, mErr := h.models.GetByName(name)
+		out = append(out, map[string]any{"name": name, "exists": mErr == nil})
+	}
+	jsonOut(w, 200, map[string]any{"models": out})
+}
+
+// ImportModels 批量导入勾选的模型为禁用态草稿(enabled=0),同名跳过。
+func (h *Handler) ImportModels(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Items []struct {
+			ProviderID    int64  `json:"provider_id"`
+			UpstreamModel string `json:"upstream_model"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, 400, "invalid body")
+		return
+	}
+	imported := 0
+	var skipped []string
+	for _, it := range req.Items {
+		if it.UpstreamModel == "" {
+			continue
+		}
+		if _, err := h.models.GetByName(it.UpstreamModel); err == nil {
+			skipped = append(skipped, it.UpstreamModel)
+			continue
+		}
+		if _, err := h.models.CreateDraft(it.ProviderID, it.UpstreamModel); err != nil {
+			continue
+		}
+		imported++
+	}
+	jsonOut(w, 200, map[string]any{"imported": imported, "skipped": len(skipped), "skipped_names": skipped})
+}
+
+// TestProvider 测某供应商连通性/延迟。
+func (h *Handler) TestProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	provider, err := h.providers.Get(id)
+	if err != nil {
+		jsonErr(w, 400, "provider not found")
+		return
+	}
+	latency, err := h.prober.Ping(r.Context(), provider)
+	if err != nil {
+		jsonOut(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	jsonOut(w, 200, map[string]any{"ok": true, "latency_ms": latency.Milliseconds()})
 }
 
 // ---- models ----

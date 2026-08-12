@@ -35,6 +35,18 @@ func (s *ModelStore) Create(name string, providerID int64, upstreamModel string)
 	return s.Get(id)
 }
 
+// CreateDraft 创建禁用态草稿模型(enabled=0),名称取上游模型名。
+func (s *ModelStore) CreateDraft(providerID int64, upstreamModel string) (Model, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO custom_models(name, provider_id, upstream_model, enabled) VALUES(?, ?, ?, 0)`,
+		upstreamModel, providerID, upstreamModel)
+	if err != nil {
+		return Model{}, fmt.Errorf("create draft model: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return s.Get(id)
+}
+
 func (s *ModelStore) Get(id int64) (Model, error) {
 	return s.scan(s.db.QueryRow(
 		`SELECT id, name, provider_id, upstream_model, enabled, created_at FROM custom_models WHERE id=?`, id))

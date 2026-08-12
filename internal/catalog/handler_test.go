@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
@@ -137,5 +138,82 @@ func TestPriceHandler(t *testing.T) {
 	price, ok := resp["price"].(map[string]any)
 	if !ok || price["input_price"] != 5.0 {
 		t.Errorf("price = %+v", resp)
+	}
+}
+
+func newTestHandler(t *testing.T) (*Handler, *httptest.Server) {
+	f := newCatalogFixture(t)
+	h := NewHandler(f.providers, f.models, f.prices)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}`))
+	}))
+	t.Cleanup(up.Close)
+	h.SetProber(NewProber(up.Client()))
+	// 建一个指向 up 的 provider
+	f.providers.Create("Up", up.URL, "sk-test", "openai_chat")
+	return h, up
+}
+
+func TestFetchProviderModels(t *testing.T) {
+	h, _ := newTestHandler(t)
+	r := chi.NewRouter()
+	r.Get("/api/providers/{id}/models/fetch", h.FetchProviderModels)
+	req := httptest.NewRequest("GET", "/api/providers/1/models/fetch", nil).WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Models []map[string]any `json:"models"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Models) != 2 {
+		t.Fatalf("models=%+v", resp.Models)
+	}
+}
+
+func TestImportModels(t *testing.T) {
+	h, _ := newTestHandler(t)
+	body, _ := json.Marshal(map[string]any{
+		"items": []map[string]any{
+			{"provider_id": 1, "upstream_model": "gpt-4o"},
+			{"provider_id": 1, "upstream_model": "gpt-4o"},
+			{"provider_id": 1, "upstream_model": "gpt-4o-mini"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/models/import", bytes.NewReader(body)).WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	h.ImportModels(rec, req)
+	var resp struct {
+		Imported     int      `json:"imported"`
+		Skipped      int      `json:"skipped"`
+		SkippedNames []string `json:"skipped_names"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Imported != 2 || resp.Skipped != 1 {
+		t.Fatalf("imported=%d skipped=%d", resp.Imported, resp.Skipped)
+	}
+	// 确认导入为禁用态
+	m, err := h.models.GetByName("gpt-4o")
+	if err != nil || m.Enabled {
+		t.Fatalf("draft should be disabled: %+v err=%v", m, err)
+	}
+}
+
+func TestTestProviderOK(t *testing.T) {
+	h, _ := newTestHandler(t)
+	r := chi.NewRouter()
+	r.Post("/api/providers/{id}/test", h.TestProvider)
+	req := httptest.NewRequest("POST", "/api/providers/1/test", nil).WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["ok"] != true {
+		t.Fatalf("resp=%+v", resp)
 	}
 }

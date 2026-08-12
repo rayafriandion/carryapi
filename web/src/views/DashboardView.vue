@@ -101,9 +101,13 @@ function renderChart(pts: any[]) {
 }
 
 onMounted(async () => {
+  // base_url is admin-only; fetch separately so a 403 (non-admin) can't break the dashboard
   try {
     const info = await http.get('/api/gateway/info')
     baseUrl.value = info.data?.base_url || ''
+  } catch { /* non-admin or failure: leave base_url empty */ }
+
+  try {
     const [s, t, l] = await Promise.all([
       http.get('/api/stats/summary'),
       http.get('/api/stats/trend', { params: { granularity: 'day' } }),

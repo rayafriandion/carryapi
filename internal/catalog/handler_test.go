@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"carryapi/internal/middleware"
 	"carryapi/internal/user"
@@ -201,6 +202,37 @@ func TestImportModels(t *testing.T) {
 	}
 }
 
+func TestImportModelsFailed(t *testing.T) {
+	h, _ := newTestHandler(t)
+	// provider_id 999 doesn't exist -> CreateDraft FK failure -> counted as failed
+	body, _ := json.Marshal(map[string]any{
+		"items": []map[string]any{
+			{"provider_id": 1, "upstream_model": "gpt-4o"},
+			{"provider_id": 999, "upstream_model": "gpt-4o-broken"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/models/import", bytes.NewReader(body)).WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	h.ImportModels(rec, req)
+	var resp struct {
+		Imported int      `json:"imported"`
+		Failed   int      `json:"failed"`
+		Errors   []string `json:"errors"`
+		Skipped  int      `json:"skipped"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Imported != 1 || resp.Failed != 1 || len(resp.Errors) != 1 {
+		t.Fatalf("imported=%d failed=%d errors=%v", resp.Imported, resp.Failed, resp.Errors)
+	}
+	if !bytes.Contains([]byte(resp.Errors[0]), []byte("gpt-4o-broken")) {
+		t.Errorf("errors[0]=%q, want mention of upstream model", resp.Errors[0])
+	}
+	// the failed item must not be persisted
+	if _, err := h.models.GetByName("gpt-4o-broken"); err == nil {
+		t.Errorf("failed item should not have been persisted")
+	}
+}
+
 func TestTestProviderOK(t *testing.T) {
 	h, _ := newTestHandler(t)
 	r := chi.NewRouter()
@@ -215,5 +247,30 @@ func TestTestProviderOK(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["ok"] != true {
 		t.Fatalf("resp=%+v", resp)
+	}
+}
+
+func TestTestProviderFailure(t *testing.T) {
+	f := newCatalogFixture(t)
+	h := NewHandler(f.providers, f.models, f.prices)
+	// dead/unreachable upstream URL
+	f.providers.Create("Dead", "http://127.0.0.1:1", "sk-test", "openai_chat")
+	h.SetProber(NewProber(&http.Client{Timeout: 500 * time.Millisecond}))
+	r := chi.NewRouter()
+	r.Post("/api/providers/{id}/test", h.TestProvider)
+	req := httptest.NewRequest("POST", "/api/providers/1/test", nil).WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	// per-spec: failure returns 200 with ok:false
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["ok"] != false {
+		t.Fatalf("resp=%+v, want ok=false", resp)
+	}
+	if errMsg, _ := resp["error"].(string); errMsg == "" {
+		t.Fatalf("resp=%+v, want non-empty error", resp)
 	}
 }

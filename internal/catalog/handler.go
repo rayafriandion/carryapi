@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -150,6 +151,8 @@ func (h *Handler) ImportModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	imported := 0
+	failed := 0
+	var errors []string
 	var skipped []string
 	for _, it := range req.Items {
 		if it.UpstreamModel == "" {
@@ -160,11 +163,13 @@ func (h *Handler) ImportModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if _, err := h.models.CreateDraft(it.ProviderID, it.UpstreamModel); err != nil {
+			failed++
+			errors = append(errors, fmt.Sprintf("%s: %v", it.UpstreamModel, err))
 			continue
 		}
 		imported++
 	}
-	jsonOut(w, 200, map[string]any{"imported": imported, "skipped": len(skipped), "skipped_names": skipped})
+	jsonOut(w, 200, map[string]any{"imported": imported, "failed": failed, "errors": errors, "skipped": len(skipped), "skipped_names": skipped})
 }
 
 // TestProvider 测某供应商连通性/延迟。

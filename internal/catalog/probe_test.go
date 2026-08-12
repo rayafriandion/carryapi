@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,6 +69,12 @@ func TestFetchModelsNon2xx(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 401")
 	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("err = %q, want status 401", err)
+	}
+	if !strings.Contains(err.Error(), "bad key") {
+		t.Errorf("err = %q, want body message", err)
+	}
 }
 
 func TestPing(t *testing.T) {
@@ -97,5 +104,8 @@ func TestPingNon2xx(t *testing.T) {
 	_, err := p.Ping(context.Background(), testProvider(srv.URL, "openai_chat"))
 	if err == nil {
 		t.Fatal("expected error for 500")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("err = %q, want status 500", err)
 	}
 }

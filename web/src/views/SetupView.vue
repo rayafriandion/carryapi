@@ -1,7 +1,7 @@
 <template>
   <div class="setup-page">
     <n-card class="setup-card" :bordered="false">
-      <div class="setup-title">carryAPI · 首次设置</div>
+      <div class="setup-title">首次使用 · 设置管理员账户</div>
       <p class="setup-sub">请设置管理员账户，用于登录管理后台。</p>
       <n-form ref="formRef" :model="form" :rules="rules">
         <n-form-item label="邮箱" path="email">

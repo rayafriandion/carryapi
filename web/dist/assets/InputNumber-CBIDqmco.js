@@ -1,4 +1,4 @@
-import{$t as e,Bn as t,Ct as n,Et as r,In as i,Mt as a,Nt as o,Q as s,_ as c,a as l,cn as u,ct as d,et as ee,fn as te,g as f,i as p,on as m,ot as h,u as g,ut as _,v,wn as ne,x as re,xt as y}from"./http-BFtIegGs.js";import{n as ie}from"./_plugin-vue_export-helper-CEWy_VHC.js";import{a as ae,n as b,t as x}from"./Input-DBLSxKuT.js";import{t as S}from"./Add-DSkGbuIc.js";var C=m({name:`Remove`,render(){return u(`svg`,{xmlns:`http://www.w3.org/2000/svg`,viewBox:`0 0 512 512`},u(`line`,{x1:`400`,y1:`256`,x2:`112`,y2:`256`,style:`
+import{$t as e,Bn as t,Ct as n,Et as r,In as i,Mt as a,Nt as o,Q as s,_ as c,a as l,cn as u,ct as d,et as ee,fn as te,g as f,i as p,on as m,ot as h,u as g,ut as _,v,wn as ne,x as re,xt as y}from"./http-BFtIegGs.js";import{n as ie}from"./_plugin-vue_export-helper-CEWy_VHC.js";import{a as ae,n as b,t as x}from"./Input-DUB9fFZu.js";import{t as S}from"./Add-DSkGbuIc.js";var C=m({name:`Remove`,render(){return u(`svg`,{xmlns:`http://www.w3.org/2000/svg`,viewBox:`0 0 512 512`},u(`line`,{x1:`400`,y1:`256`,x2:`112`,y2:`256`,style:`
         fill: none;
         stroke: currentColor;
         stroke-linecap: round;

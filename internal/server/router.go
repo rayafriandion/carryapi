@@ -117,10 +117,10 @@ func (s *Server) buildRouter() http.Handler {
 					r.Put("/api/models/{id}", deps.Catalog.UpdateModel)
 					r.Delete("/api/models/{id}", deps.Catalog.DeleteModel)
 					r.Get("/api/models/{id}/price", deps.Catalog.GetModelPrice)
-						r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
-					}
-					r.Get("/api/gateway/info", s.handleGatewayInfo)
-				})
+					r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
+				}
+				r.Get("/api/gateway/info", s.handleGatewayInfo)
+			})
 		})
 	}
 

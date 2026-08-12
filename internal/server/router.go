@@ -112,10 +112,13 @@ func (s *Server) buildRouter() http.Handler {
 					r.Post("/api/providers", deps.Catalog.CreateProvider)
 					r.Put("/api/providers/{id}", deps.Catalog.UpdateProvider)
 					r.Delete("/api/providers/{id}", deps.Catalog.DeleteProvider)
+					r.Post("/api/providers/{id}/test", deps.Catalog.TestProvider)
+					r.Post("/api/providers/{id}/models/fetch", deps.Catalog.FetchProviderModels)
 					r.Get("/api/models", deps.Catalog.ListModels)
 					r.Post("/api/models", deps.Catalog.CreateModel)
 					r.Put("/api/models/{id}", deps.Catalog.UpdateModel)
 					r.Delete("/api/models/{id}", deps.Catalog.DeleteModel)
+					r.Post("/api/models/import", deps.Catalog.ImportModels)
 					r.Get("/api/models/{id}/price", deps.Catalog.GetModelPrice)
 					r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
 				}

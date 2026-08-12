@@ -26,6 +26,7 @@ type Deps struct {
 	Users    *user.Store
 	Sessions *auth.SessionStore
 	Auth     *api.AuthHandler
+	Setup    *api.SetupHandler
 	UsersH   *api.UserHandler
 	Keys     *api.KeyHandler
 	Quotas   *api.QuotaHandler

@@ -17,6 +17,12 @@ func (s *Server) buildRouter() http.Handler {
 
 	deps := s.deps
 
+	// setup(首次启动向导,公开)
+	if deps.Setup != nil {
+		r.Get("/api/setup/status", deps.Setup.Status)
+		r.Post("/api/setup/admin", deps.Setup.CreateAdmin)
+	}
+
 	// auth(限流包裹登录/注册);only mount if AuthHandler + Sessions + Users present
 	if deps.Auth != nil && deps.Sessions != nil && deps.Users != nil {
 		r.Route("/api/auth", func(r chi.Router) {

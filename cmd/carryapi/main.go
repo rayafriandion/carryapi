@@ -50,6 +50,7 @@ func main() {
 	ls := auth.NewLoginService(us, ss, st)
 	authH := api.NewAuthHandler(ls, ss, us, st)
 	usersH := api.NewUserHandler(us, ss)
+	setupH := api.NewSetupHandler(us)
 	keysH := api.NewKeyHandler(ks)
 	quotasH := api.NewQuotaHandler(us)
 	settingsH := api.NewSettingsHandler(st)
@@ -96,6 +97,7 @@ func main() {
 		Sessions: ss,
 		Auth:     authH,
 		UsersH:   usersH,
+		Setup:    setupH,
 		Keys:     keysH,
 		Quotas:   quotasH,
 		Settings: settingsH,

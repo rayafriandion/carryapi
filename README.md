@@ -2,9 +2,26 @@
 
 自托管 API 聚合路由服务。多上游聚合、三种协议互转(OpenAI Chat / Responses / Anthropic)、可视化配置、用量与费用统计、成功率监控、多用户认证。
 
+> 📖 **完整使用手册见 [MANUAL.md](MANUAL.md)**(安装、构建、启动、配置、API、运维、FAQ)。以下为快速开始。
+
 ## 状态
 
-子项目 1(项目骨架与基础设施)已完成。后续子项目:认证、协议适配层(IR)、上游代理、统计与管理 API、前端。
+✅ 全部功能已完成:单二进制部署(前端内嵌)、认证(密码/2FA/Passkey/OAuth)、API Key、配额、多协议代理、用量/费用/成功率统计、请求日志、管理后台。
+
+## 快速开始
+
+```bash
+# 生产模式(构建 + 启动,默认端口 8067)
+bash scripts/run.sh          # Linux / macOS / git-bash
+# 或 Windows:
+# scripts\run.bat
+
+# 开发模式(前端热更新 + 后端同时启动)
+bash scripts/dev.sh
+```
+
+访问 `http://localhost:8067/`,用首次启动控制台打印的管理员密码登录。
+
 
 ## 构建
 

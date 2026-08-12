@@ -1,5 +1,15 @@
 <template>
   <div class="dashboard">
+    <n-card class="section base-url-card">
+      <div class="base-url">
+        <span class="label">API Base URL</span>
+        <n-text code>{{ baseUrl || '—' }}</n-text>
+        <n-button size="small" tertiary round type="primary" :disabled="!baseUrl" @click="copyBaseUrl">
+          复制
+        </n-button>
+      </div>
+    </n-card>
+
     <n-grid :cols="6" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
       <n-grid-item span="6 s:3 m:2">
         <n-card><n-statistic label="总请求" :value="summary?.TotalRequests ?? 0" /></n-card>
@@ -34,7 +44,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import * as echarts from 'echarts'
-import { NGrid, NGridItem, NCard, NStatistic, NDataTable, useMessage } from 'naive-ui'
+import { NGrid, NGridItem, NCard, NStatistic, NDataTable, NText, NButton, useMessage } from 'naive-ui'
 
 const message = useMessage()
 
@@ -43,7 +53,17 @@ import { http, errorMessage } from '../api/http'
 const summary = ref<any>(null)
 const logs = ref<any[]>([])
 const chartEl = ref<HTMLElement>()
+const baseUrl = ref('')
 let chart: echarts.ECharts | null = null
+
+async function copyBaseUrl() {
+  try {
+    await navigator.clipboard.writeText(baseUrl.value)
+    message.success('已复制')
+  } catch {
+    message.error('复制失败')
+  }
+}
 
 const columns = [
   { title: '时间', key: 'CreatedAt' },
@@ -71,6 +91,8 @@ function renderChart(pts: any[]) {
 
 onMounted(async () => {
   try {
+    const info = await http.get('/api/gateway/info')
+    baseUrl.value = info.data?.base_url || ''
     const [s, t, l] = await Promise.all([
       http.get('/api/stats/summary'),
       http.get('/api/stats/trend', { params: { granularity: 'day' } }),
@@ -93,6 +115,17 @@ onUnmounted(() => {
 <style scoped>
 .section {
   margin-top: 16px;
+}
+.base-url-card {
+  margin-bottom: 16px;
+}
+.base-url {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.base-url .label {
+  font-weight: 600;
 }
 .chart {
   height: 300px;

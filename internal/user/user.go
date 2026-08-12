@@ -65,6 +65,30 @@ func (s *Store) List() ([]User, error) {
 	return out, rows.Err()
 }
 
+// HasAdmin reports whether at least one admin user exists.
+func (s *Store) HasAdmin() (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role='admin'`).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("count admins: %w", err)
+	}
+	return n > 0, nil
+}
+
+// FirstAdminID returns the id of the lowest-id admin (the bootstrap admin).
+// ok is false when no admin exists.
+func (s *Store) FirstAdminID() (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1`).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("first admin: %w", err)
+	}
+	return id, true, nil
+}
+
 func (s *Store) UpdateStatus(id int64, status string) error {
 	_, err := s.db.Exec(`UPDATE users SET status=? WHERE id=?`, status, id)
 	return err

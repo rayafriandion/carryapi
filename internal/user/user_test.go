@@ -123,3 +123,39 @@ func TestDeleteCascade(t *testing.T) {
 		t.Errorf("sessions left: %d", n)
 	}
 }
+
+func TestHasAdminAndFirstAdminID(t *testing.T) {
+	s := newStore(t)
+	ok, err := s.HasAdmin()
+	if err != nil {
+		t.Fatalf("HasAdmin: %v", err)
+	}
+	if ok {
+		t.Fatal("expected no admin initially")
+	}
+	_, found, err := s.FirstAdminID()
+	if err != nil {
+		t.Fatalf("FirstAdminID: %v", err)
+	}
+	if found {
+		t.Fatal("expected FirstAdminID not found initially")
+	}
+
+	s.Create("a@x.com", "hash1", "user")
+	s.Create("admin1@x.com", "hash2", "admin")
+	s.Create("admin2@x.com", "hash3", "admin")
+
+	ok, err = s.HasAdmin()
+	if err != nil || !ok {
+		t.Fatalf("HasAdmin after create: ok=%v err=%v", ok, err)
+	}
+	id, found, err := s.FirstAdminID()
+	if err != nil || !found {
+		t.Fatalf("FirstAdminID: found=%v err=%v", found, err)
+	}
+	// admin1 先创建,id 更小,应为首个 admin
+	u, _ := s.GetByID(id)
+	if u.Email != "admin1@x.com" {
+		t.Fatalf("expected first admin admin1@x.com, got %s", u.Email)
+	}
+}

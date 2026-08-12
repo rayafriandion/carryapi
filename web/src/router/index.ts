@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { http } from '../api/http'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    { path: '/setup', name: 'setup', component: () => import('../views/SetupView.vue') },
     { path: '/login', name: 'login', component: () => import('../views/LoginView.vue') },
     { path: '/', component: () => import('../components/AppLayout.vue'), children: [
       { path: '', name: 'dashboard', component: () => import('../views/DashboardView.vue') },
@@ -26,8 +28,23 @@ router.beforeEach(async (to) => {
   if (!auth.initialized) {
     try { await auth.fetchMe() } catch { /* 未登录 */ }
   }
-  if (to.name === 'login') return true
-  if (!auth.isLoggedIn) return { name: 'login' }
+  // 未登录时先检查是否需要进行首次设置
+  if (!auth.isLoggedIn) {
+    let needsSetup = false
+    try {
+      const res = await http.get('/api/setup/status')
+      needsSetup = !!res.data?.needs_setup
+    } catch { /* 忽略 */ }
+    if (needsSetup) {
+      if (to.name !== 'setup') return { name: 'setup' }
+      return true
+    }
+    if (to.name === 'setup') return { name: 'login' }
+    if (to.name === 'login') return true
+    return { name: 'login' }
+  }
+  // 已登录
+  if (to.name === 'login' || to.name === 'setup') return { name: 'dashboard' }
   if (to.meta.admin && !auth.isAdmin) return { name: 'dashboard' }
   return true
 })

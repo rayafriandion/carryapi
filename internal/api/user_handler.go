@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -72,6 +73,13 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Status string `json:"status"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
+	// admin 身份保护:不能降级/禁用自己,不能降级/禁用首个 admin
+	if (req.Role != "" && req.Role != "admin") || req.Status == "disabled" {
+		if err := h.guardAdminProtection(r, id); err != nil {
+			JSONError(w, 400, err.Error())
+			return
+		}
+	}
 	if req.Role != "" {
 		h.users.UpdateRole(id, req.Role)
 	}
@@ -87,11 +95,41 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]string{"status": "ok"})
 }
 
+// guardAdminProtection rejects demoting/disabling the current user or the
+// bootstrap (first) admin. Returns an error describing the violation.
+func (h *UserHandler) guardAdminProtection(r *http.Request, id int64) error {
+	me, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		return fmt.Errorf("unauthorized")
+	}
+	if me.ID == id {
+		return fmt.Errorf("cannot remove your own admin role")
+	}
+	firstID, found, err := h.users.FirstAdminID()
+	if err != nil {
+		return fmt.Errorf("failed to check admin")
+	}
+	if found && firstID == id {
+		return fmt.Errorf("cannot modify the initial admin account")
+	}
+	return nil
+}
+
 func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	// 防止删自己
 	if u, ok := middleware.UserFromContext(r.Context()); ok && u.ID == id {
 		JSONError(w, 400, "cannot delete yourself")
+		return
+	}
+	// 防止删首个 admin
+	firstID, found, err := h.users.FirstAdminID()
+	if err != nil {
+		JSONError(w, 500, "failed to check admin")
+		return
+	}
+	if found && firstID == id {
+		JSONError(w, 400, "cannot delete the initial admin account")
 		return
 	}
 	if err := h.users.DeleteCascade(id); err != nil {

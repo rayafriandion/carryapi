@@ -58,7 +58,18 @@ let chart: echarts.ECharts | null = null
 
 async function copyBaseUrl() {
   try {
-    await navigator.clipboard.writeText(baseUrl.value)
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(baseUrl.value)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = baseUrl.value
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
     message.success('已复制')
   } catch {
     message.error('复制失败')

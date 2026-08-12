@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -126,30 +124,23 @@ func main() {
 	}
 }
 
-// bootstrapAdmin checks whether any admin user exists; if not, creates one
-// using CARRYAPI_ADMIN_EMAIL / CARRYAPI_ADMIN_PASSWORD env vars. When the
-// password env var is unset a random 16-char password is generated and
-// printed to stdout (the admin must change it immediately).
+// bootstrapAdmin creates an admin only when both CARRYAPI_ADMIN_EMAIL and
+// CARRYAPI_ADMIN_PASSWORD are explicitly set AND no admin exists yet. This
+// preserves scripted/provisioned deployments. Otherwise setup is left to the
+// first-run browser wizard (/api/setup/admin). No random password is printed.
 func bootstrapAdmin(d *sql.DB, us *user.Store) {
-	var adminCount int
-	err := d.QueryRow("SELECT COUNT(*) FROM users WHERE role='admin'").Scan(&adminCount)
+	email := os.Getenv("CARRYAPI_ADMIN_EMAIL")
+	pw := os.Getenv("CARRYAPI_ADMIN_PASSWORD")
+	if email == "" || pw == "" {
+		return
+	}
+	has, err := us.HasAdmin()
 	if err != nil {
 		log.Printf("admin count check: %v", err)
 		return
 	}
-	if adminCount > 0 {
+	if has {
 		return
-	}
-	email := os.Getenv("CARRYAPI_ADMIN_EMAIL")
-	pw := os.Getenv("CARRYAPI_ADMIN_PASSWORD")
-	if email == "" {
-		email = "admin@carryapi.local"
-	}
-	if pw == "" {
-		pw = generateRandomPassword(16)
-		fmt.Printf("created admin %s with password: %s (change it immediately)\n", email, pw)
-	} else {
-		fmt.Printf("created admin %s\n", email)
 	}
 	hash, err := auth.HashPassword(pw)
 	if err != nil {
@@ -159,17 +150,4 @@ func bootstrapAdmin(d *sql.DB, us *user.Store) {
 	if _, err := us.Create(email, hash, "admin"); err != nil {
 		log.Printf("create admin: %v", err)
 	}
-}
-
-// generateRandomPassword returns a hex-encoded random string of 2*n chars
-// (n random bytes).
-func generateRandomPassword(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		// rand.Read should never fail on supported platforms; fall back to
-		// a non-cryptographic but still unpredictable value to avoid a
-		// fatal exit during bootstrap.
-		log.Printf("admin password rand: %v", err)
-	}
-	return hex.EncodeToString(b)
 }

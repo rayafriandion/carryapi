@@ -1,15 +1,25 @@
 @echo off
-REM carryAPI 生产模式:构建单二进制(含内嵌前端)并运行
-REM 用法: scripts\run.bat [CARRYAPI_PORT]
-REM 环境变量: CARRYAPI_PORT, CARRYAPI_DB_PATH, CARRYAPI_ADMIN_EMAIL, CARRYAPI_ADMIN_PASSWORD 等
+REM carryAPI production mode: build single binary (with embedded frontend) and run
+REM Usage: scripts\run.bat [CARRYAPI_PORT]
+REM Env vars: CARRYAPI_PORT, CARRYAPI_DB_PATH, CARRYAPI_ADMIN_EMAIL, CARRYAPI_ADMIN_PASSWORD, ...
 cd /d "%~dp0.."
 
 set "BIN=carryapi.exe"
 if not "%1"=="" set "CARRYAPI_PORT=%1"
 
-echo ==^> 构建单二进制(内嵌前端)...
+echo ==^> Building single binary (embedded frontend)...
 go build -o "%BIN%" ./cmd/carryapi
+if errorlevel 1 (
+    echo Build failed. Is Go installed and on PATH?
+    pause
+    exit /b 1
+)
 
-echo ==^> 启动 carryAPI (默认 http://localhost:%CARRYAPI_PORT%)
-echo     首次启动会在控制台打印管理员密码,请记下。Ctrl+C 停止。
+echo ==^> Starting carryAPI (default http://localhost:%CARRYAPI_PORT%)
+echo     On first start the admin password is printed in the console - save it.
+echo     Press Ctrl+C to stop.
 "%BIN%"
+if errorlevel 1 (
+    echo Failed to start. Port %CARRYAPI_PORT% may be in use or config is invalid.
+    pause
+)

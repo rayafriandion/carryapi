@@ -17,6 +17,7 @@ type catalogFixture struct {
 	providers *ProviderStore
 	models    *ModelStore
 	prices    *PriceStore
+	bindings  *ModelBindingStore
 }
 
 func newCatalogFixture(t *testing.T) *catalogFixture {
@@ -28,6 +29,8 @@ func newCatalogFixture(t *testing.T) *catalogFixture {
 	if err := db.Migrate(d); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	// :memory: 数据库对每个连接独立,限制单连接确保迁移与被测代码共享同一份数据。
+	d.SetMaxOpenConns(1)
 	t.Cleanup(func() { d.Close() })
 	c, _ := crypto.New(bytes.Repeat([]byte{1}, 32))
 	return &catalogFixture{
@@ -35,7 +38,12 @@ func newCatalogFixture(t *testing.T) *catalogFixture {
 		providers: NewProviderStore(d, c),
 		models:    NewModelStore(d),
 		prices:    NewPriceStore(d),
+		bindings:  NewModelBindingStore(d),
 	}
+}
+
+func (f *catalogFixture) bindingsStore() *ModelBindingStore {
+	return f.bindings
 }
 
 func TestModelCreateAndGetByName(t *testing.T) {

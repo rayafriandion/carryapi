@@ -56,11 +56,14 @@ GOOS=windows GOARCH=amd64 go build -o carryapi-windows-amd64.exe ./cmd/carryapi
 |------|------|------|
 | `CARRYAPI_PORT` | 8067 | 监听端口 |
 | `CARRYAPI_DB_PATH` | ./carryapi.db | 数据库路径 |
-| `CARRYAPI_MASTER_KEY` | (自动生成) | 敏感字段加密主密钥,32 字节 |
+| `CARRYAPI_MASTER_KEY` | (自动生成) | 敏感字段加密主密钥,必须恰好 32 字节 |
+| `CARRYAPI_KEY_FILE` | carryapi.key | 主密钥文件路径;未设 `CARRYAPI_MASTER_KEY` 时读取,不存在则自动生成 |
+| `CARRYAPI_RP_ID` | localhost | WebAuthn Passkey 的 Relying Party 域 |
+| `CARRYAPI_RP_ORIGIN` | http://localhost:{port} | WebAuthn origin(公网部署需改为 HTTPS 地址) |
 
 ### 广播开关
 
-广播开 = 监听 `0.0.0.0`(局域网/公网可访问);广播关 = 监听 `127.0.0.1`(仅本机)。存于数据库 `settings` 表 `listen_host` 键。后续子项目的管理后台提供可视化切换(改值后需重启进程)。
+广播开 = 监听 `0.0.0.0`(局域网/公网可访问);广播关 = 监听 `127.0.0.1`(仅本机)。存于数据库 `settings` 表 `listen_host` 键。管理后台「系统设置」页展示当前值(只读),修改监听地址需改配置并重启进程。
 
 ## 认证
 
@@ -106,7 +109,7 @@ OAuth 提供方通过以下 `settings` 表键配置(未设置或未完整设置�
 | `oauth_discord_client_id` / `oauth_discord_client_secret` / `oauth_discord_redirect_url` | Discord OAuth2 应用 |
 | `oauth_x_client_id` / `oauth_x_client_secret` / `oauth_x_redirect_url` | X(Twitter)OAuth2 应用 |
 
-管理后台可改这些键;改后需重启进程生效。
+当前版本无后台配置入口,需直接写入数据库 `settings` 表;三项齐全后重启进程生效。公网部署需在对应平台注册回调地址 `/api/auth/oauth/callback/<provider>`。
 
 ## 代理端点
 
@@ -115,6 +118,7 @@ OAuth 提供方通过以下 `settings` 表键配置(未设置或未完整设置�
 | 端点 | 下游协议 |
 |------|----------|
 | `POST /v1/chat/completions` | OpenAI Chat |
+| `POST /v1/completions` | OpenAI Chat(旧别名,同 Chat) |
 | `POST /v1/responses` | OpenAI Responses |
 | `POST /v1/messages` | Anthropic Messages |
 | `GET /v1/models` | OpenAI 模型列表 |
@@ -170,16 +174,18 @@ curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8067/v1/models
 |------|------|------|
 | 登录/注册 | 邮箱+密码、TOTP 2FA、Passkey、Discord/X OAuth | 公开 |
 | 仪表盘 | 今日请求数/Token/费用/成功率、趋势图、最近日志、API base_url(可复制) | 登录 |
-| 统计分析 | 汇总(按模型/上游/Key)、时间趋势、费用核算、成功率(可下钻) | 登录 |
+| 模型列表/详情 | 只读浏览启用模型、价格、上游绑定、30天统计与健康时间轴 | 登录 |
+| 统计分析 | 汇总(按模型/上游/Key)、时间趋势、费用核算(CSV导出)、成功率(失败下钻、CSV导出) | 登录 |
 | 请求日志 | 分页 + 筛选(model/状态/错误类型/RequestId/时间) | 登录 |
 | API Key | 创建(明文仅显示一次)、复制、编辑标签/禁用/删除 | 登录 |
-| 模型管理 | 上游供应商(可测试连通性)、自定义模型(可从供应商批量导入)、定价(含价格历史) | admin |
-| 配额管理 | 按用户/Key 设 token/费用上限 | admin |
+| 账号设置 | 基本信息、TOTP 开关(含备份码) | 登录 |
+| 模型管理 | 上游供应商(可测试连通性)、自定义模型(可从供应商批量导入)、定价 | admin |
+| 路由配置 | 按模型管理上游绑定、路由策略、24h健康时间轴与性能指标 | admin |
+| 配额管理 | 设置 token/费用上限(当前仅编辑当前登录用户自身配额) | admin |
 | 用户管理 | 创建/改角色/禁用/删除用户 | admin |
-| 系统设置 | 广播开关(展示)、开放注册、强制2FA、日志保留天数 | admin |
-| 账号设置 | 基本信息、绑定登录方式、TOTP 开关 | 登录 |
+| 系统设置 | 广播地址(只读展示)、开放注册、强制2FA、日志保留天数 | admin |
 
-> 说明:广播开关当前为展示项——监听地址需在服务器配置中修改并重启生效。OAuth client id/secret 通过后端设置配置。
+> 说明:`force_2fa` 与 `log_retention_days` 当前仅在后台保存/展示,对应强制逻辑与日志清理任务尚未实现,不产生实际效果。OAuth client id/secret 目前需直接写入数据库 `settings` 表,重启后生效。完整逐页操作说明见 [MANUAL.md](MANUAL.md)。
 
 前端开发:`cd web && npm run dev`(热更新,`/api`/`/v1` 代理到后端)。
 

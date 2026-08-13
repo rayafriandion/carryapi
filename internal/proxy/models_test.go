@@ -41,7 +41,7 @@ func newModelListFixture(t *testing.T) (*Proxy, *user.User) {
 	if err != nil {
 		t.Fatalf("create model: %v", err)
 	}
-	if _, err := pr.Set(m.ID, 5.0, 15.0, nil, nil); err != nil {
+	if _, err := pr.Set(m.ID, 5.0, 15.0, nil, nil, "USD"); err != nil {
 		t.Fatalf("set price: %v", err)
 	}
 	return p, &u

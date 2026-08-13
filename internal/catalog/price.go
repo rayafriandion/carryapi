@@ -9,6 +9,8 @@ import (
 
 var ErrNoPrice = errors.New("no price configured")
 
+var validCurrencies = map[string]bool{"USD": true, "CNY": true}
+
 type Price struct {
 	ID              int64
 	ModelID         int64
@@ -28,15 +30,37 @@ func NewPriceStore(db *sql.DB) *PriceStore {
 	return &PriceStore{db: db}
 }
 
-func (s *PriceStore) Set(modelID int64, inputPrice, outputPrice float64, cacheRead, cacheWrite *float64) (Price, error) {
-	res, err := s.db.Exec(
-		`INSERT INTO model_prices(model_id, input_price, output_price, cache_read_price, cache_write_price) VALUES(?, ?, ?, ?, ?)`,
-		modelID, inputPrice, outputPrice, cacheRead, cacheWrite)
+func (s *PriceStore) Set(modelID int64, inputPrice, outputPrice float64, cacheRead, cacheWrite *float64, currency string) (Price, error) {
+	return s.setExec(s.db, modelID, inputPrice, outputPrice, cacheRead, cacheWrite, currency)
+}
+
+// SetTx 与 Set 相同,但在调用方提供的事务中写入,用于与模型创建/更新原子化。
+func (s *PriceStore) SetTx(tx *sql.Tx, modelID int64, inputPrice, outputPrice float64, cacheRead, cacheWrite *float64, currency string) (Price, error) {
+	return s.setExec(tx, modelID, inputPrice, outputPrice, cacheRead, cacheWrite, currency)
+}
+
+type sqlExecutor interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func (s *PriceStore) setExec(exe sqlExecutor, modelID int64, inputPrice, outputPrice float64, cacheRead, cacheWrite *float64, currency string) (Price, error) {
+	if currency == "" {
+		currency = "USD"
+	}
+	if !validCurrencies[currency] {
+		return Price{}, fmt.Errorf("invalid currency %q", currency)
+	}
+	res, err := exe.Exec(
+		`INSERT INTO model_prices(model_id, input_price, output_price, cache_read_price, cache_write_price, currency) VALUES(?, ?, ?, ?, ?, ?)`,
+		modelID, inputPrice, outputPrice, cacheRead, cacheWrite, currency)
 	if err != nil {
 		return Price{}, fmt.Errorf("set price: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	return s.Get(id)
+	return s.scan(exe.QueryRow(
+		`SELECT id, model_id, input_price, output_price, cache_read_price, cache_write_price, currency, effective_from
+		 FROM model_prices WHERE id=?`, id))
 }
 
 func (s *PriceStore) Get(id int64) (Price, error) {

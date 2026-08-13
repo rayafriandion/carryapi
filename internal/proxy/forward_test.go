@@ -15,13 +15,54 @@ import (
 
 // newUpstreamServer 返回固定 Chat 响应。
 func newUpstreamServer(t *testing.T) *httptest.Server {
+	return newUpstreamServerCaptureModel(t, nil)
+}
+
+// newUpstreamServerCaptureModel 返回固定 Chat 响应,并回调记录上游收到的 model 字段。
+func newUpstreamServerCaptureModel(t *testing.T, capture *string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer sk-upstream" {
 			t.Errorf("upstream auth = %q", r.Header.Get("Authorization"))
 		}
+		if capture != nil {
+			var body struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode upstream body: %v", err)
+			}
+			*capture = body.Model
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"id":"chatcmpl-up","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"Hello from upstream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`))
 	}))
+}
+
+// TestUpstreamModelSubstitution 确保转发到上游时使用上游真实模型名(upstream_model),
+// 而不是下游自定义名。防止 DeepSeek 等上游以“模型名无效”拒绝请求(400)。
+func TestUpstreamModelSubstitution(t *testing.T) {
+	var captured string
+	up := newUpstreamServerCaptureModel(t, &captured)
+	defer up.Close()
+	// 下游名与上游名不同:模拟 carryapi 场景(下游 deepseek-v4-flash-official -> 上游 deepseek-v4-flash)
+	p, u := newProxyWithProvider(t, up.URL, "sk-upstream", "openai_chat", "deepseek-v4-flash-official", "deepseek-v4-flash")
+	plaintext, _, _ := p.deps.Keys.Create(u.ID, "test")
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "deepseek-v4-flash-official",
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if captured != "deepseek-v4-flash" {
+		t.Errorf("upstream received model = %q, want upstream_model %q (must not be downstream name)", captured, "deepseek-v4-flash")
+	}
 }
 
 // newProxyWithProvider 建一个完整 proxy(内存 db + 用户/密钥 + provider/model/price),
@@ -53,7 +94,7 @@ func newProxyWithProvider(t *testing.T, upstreamURL, apiKey, protocol, modelName
 	if err != nil {
 		t.Fatalf("create model: %v", err)
 	}
-	pr.Set(m.ID, 5.0, 15.0, nil, nil)
+	pr.Set(m.ID, 5.0, 15.0, nil, nil, "USD")
 	return p, &u
 }
 

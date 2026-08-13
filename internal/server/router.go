@@ -90,6 +90,10 @@ func (s *Server) buildRouter() http.Handler {
 					r.Get("/api/stats/success-rate", deps.Stats.SuccessRate)
 					r.Get("/api/logs", deps.Stats.Logs)
 				}
+				if deps.Catalog != nil {
+					// 已登录用户可查看启用模型目录(含价格与全局成功率/延迟)
+					r.Get("/api/catalog", deps.Catalog.ListCatalog)
+				}
 			})
 			// admin only
 			r.Group(func(r chi.Router) {
@@ -119,6 +123,11 @@ func (s *Server) buildRouter() http.Handler {
 					r.Put("/api/models/{id}", deps.Catalog.UpdateModel)
 					r.Delete("/api/models/{id}", deps.Catalog.DeleteModel)
 					r.Post("/api/models/import", deps.Catalog.ImportModels)
+					r.Get("/api/models/{id}/bindings", deps.Catalog.ListModelBindings)
+					r.Post("/api/models/{id}/bindings", deps.Catalog.CreateModelBinding)
+					r.Put("/api/models/{id}/bindings/{bindingID}", deps.Catalog.UpdateModelBinding)
+					r.Delete("/api/models/{id}/bindings/{bindingID}", deps.Catalog.DeleteModelBinding)
+					r.Put("/api/models/{id}/routing", deps.Catalog.UpdateModelRouting)
 					r.Get("/api/models/{id}/price", deps.Catalog.GetModelPrice)
 					r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
 				}

@@ -17,7 +17,7 @@ func newModelFixture(t *testing.T) (*Proxy, int64) {
 	prov, _ := ps.Create("OpenAI", "https://api.openai.com/v1", "sk-1", "openai_chat")
 	m, _ := ms.Create("my-gpt4", prov.ID, "gpt-4o")
 	var cr float64 = 0.5
-	pr.Set(m.ID, 5.0, 15.0, &cr, nil)
+	pr.Set(m.ID, 5.0, 15.0, &cr, nil, "USD")
 	p.deps.Providers = ps
 	p.deps.Models = ms
 	p.deps.Prices = pr
@@ -26,18 +26,18 @@ func newModelFixture(t *testing.T) (*Proxy, int64) {
 
 func TestResolveModel(t *testing.T) {
 	p, _ := newModelFixture(t)
-	model, provider, price, err := p.resolveModel("my-gpt4")
+	resolved, err := p.resolveModel("my-gpt4")
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
 	}
-	if model.UpstreamModel != "gpt-4o" || provider.BaseURL != "https://api.openai.com/v1" || price.InputPrice != 5.0 {
-		t.Errorf("resolve: model=%+v provider=%+v price=%+v", model, provider, price)
+	if resolved.model.UpstreamModel != "gpt-4o" || resolved.provider.BaseURL != "https://api.openai.com/v1" || resolved.price.InputPrice != 5.0 {
+		t.Errorf("resolve: model=%+v provider=%+v price=%+v", resolved.model, resolved.provider, resolved.price)
 	}
 }
 
 func TestResolveModelNotFound(t *testing.T) {
 	p, _ := newModelFixture(t)
-	if _, _, _, err := p.resolveModel("nope"); err == nil {
+	if _, err := p.resolveModel("nope"); err == nil {
 		t.Error("expected error for unknown model")
 	}
 }

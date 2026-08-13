@@ -39,6 +39,7 @@ func newCatalogServer(t *testing.T) *Server {
 		Users:    user.New(d, cipher),
 		Sessions: auth.NewSessionStore(d),
 		Catalog: catalog.NewHandler(
+			d,
 			catalog.NewProviderStore(d, cipher),
 			catalog.NewModelStore(d),
 			catalog.NewPriceStore(d),

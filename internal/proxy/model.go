@@ -6,29 +6,44 @@ import (
 	"carryapi/internal/user"
 )
 
-func (p *Proxy) resolveModel(name string) (*catalog.Model, *catalog.Provider, *catalog.Price, error) {
+type resolvedModel struct {
+	model      *catalog.Model
+	provider   *catalog.Provider
+	selected   *catalog.SelectedBinding
+	candidates []catalog.ModelBinding
+	price      *catalog.Price
+}
+
+func (p *Proxy) resolveModel(name string) (*resolvedModel, error) {
 	model, err := p.deps.Models.GetByName(name)
 	if err != nil {
-		return nil, nil, nil, ir.NewError("not_found", "model_not_found", "The model '"+name+"' does not exist", 404)
+		return nil, ir.NewError("not_found", "model_not_found", "The model '"+name+"' does not exist", 404)
 	}
 	if !model.Enabled {
-		return nil, nil, nil, ir.NewError("not_found", "model_not_found", "The model '"+name+"' is disabled", 404)
+		return nil, ir.NewError("not_found", "model_not_found", "The model '"+name+"' is disabled", 404)
 	}
-	provider, err := p.deps.Providers.Get(model.ProviderID)
+	bindings, err := p.deps.Bindings.ListEnabledByModel(model.ID)
 	if err != nil {
-		return nil, nil, nil, ir.NewError("internal", "provider_not_found", "provider not configured", 500)
+		return nil, ir.NewError("internal", "bindings_unavailable", "failed to load model bindings", 500)
 	}
-	if provider.Status != "active" {
-		return nil, nil, nil, ir.NewError("internal", "provider_disabled", "provider is disabled", 500)
+	selected, candidates, err := p.getRouter().Select(model, bindings)
+	if err != nil {
+		return nil, ir.NewError("internal", "provider_not_found", "provider not configured", 500)
 	}
 	price, err := p.deps.Prices.GetCurrent(model.ID)
 	if err != nil {
-		return nil, nil, nil, ir.NewError("internal", "price_not_configured", "model has no price configured", 500)
+		return nil, ir.NewError("internal", "price_not_configured", "model has no price configured", 500)
 	}
-	return &model, &provider, &price, nil
+	provider := selected.Provider
+	return &resolvedModel{
+		model:      &model,
+		provider:   &provider,
+		selected:   &selected,
+		candidates: candidates,
+		price:      &price,
+	}, nil
 }
 
-// checkQuota 请求前预检:token/费用上限。
 func (p *Proxy) checkQuota(u *user.User, keyID int64) error {
 	scopes := []struct {
 		scope   string

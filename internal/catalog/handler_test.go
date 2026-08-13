@@ -23,7 +23,7 @@ func adminCtx() context.Context {
 
 func TestProviderCRUDHandler(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Post("/api/providers", h.CreateProvider)
 	r.With(middleware.RequireRole("admin")).Get("/api/providers", h.ListProviders)
@@ -51,7 +51,7 @@ func TestProviderCRUDHandler(t *testing.T) {
 
 func TestProviderCRUDNonAdminForbidden(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Post("/api/providers", h.CreateProvider)
 	// 非 admin context
@@ -67,14 +67,17 @@ func TestProviderCRUDNonAdminForbidden(t *testing.T) {
 
 func TestModelCRUDHandler(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Post("/api/models", h.CreateModel)
 	r.With(middleware.RequireRole("admin")).Get("/api/models", h.ListModels)
 	// 先建 provider(模型引用它)
 	prov, _ := f.providers.Create("OpenAI", "https://api.openai.com/v1", "sk-1", "openai_chat")
-	// create model
-	body, _ := json.Marshal(map[string]any{"name": "my-gpt4", "provider_id": prov.ID, "upstream_model": "gpt-4o"})
+	// create model (price fields now required)
+	body, _ := json.Marshal(map[string]any{
+		"name": "my-gpt4", "provider_id": prov.ID, "upstream_model": "gpt-4o",
+		"currency": "USD", "input_price": 2.5, "output_price": 10.0,
+	})
 	req := httptest.NewRequest("POST", "/api/models", bytes.NewReader(body))
 	req = req.WithContext(adminCtx())
 	rec := httptest.NewRecorder()
@@ -92,11 +95,15 @@ func TestModelCRUDHandler(t *testing.T) {
 	if len(list) != 1 || list[0]["name"] != "my-gpt4" {
 		t.Errorf("list = %+v", list)
 	}
+	price, ok := list[0]["price"].(map[string]any)
+	if !ok || price["input_price"] != 2.5 || price["output_price"] != 10.0 || price["currency"] != "USD" {
+		t.Errorf("list price = %+v", list[0]["price"])
+	}
 }
 
 func TestInvalidIDParamReturns400(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Put("/api/providers/{id}", h.UpdateProvider)
 	// 非数字 id -> 400 invalid id
@@ -114,7 +121,7 @@ func TestInvalidIDParamReturns400(t *testing.T) {
 
 func TestPriceHandler(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Put("/api/models/{id}/price", h.SetModelPrice)
 	r.With(middleware.RequireRole("admin")).Get("/api/models/{id}/price", h.GetModelPrice)
@@ -144,7 +151,7 @@ func TestPriceHandler(t *testing.T) {
 
 func newTestHandler(t *testing.T) (*Handler, *httptest.Server) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}`))
 	}))
@@ -252,7 +259,7 @@ func TestTestProviderOK(t *testing.T) {
 
 func TestTestProviderFailure(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices)
 	// dead/unreachable upstream URL
 	f.providers.Create("Dead", "http://127.0.0.1:1", "sk-test", "openai_chat")
 	h.SetProber(NewProber(&http.Client{Timeout: 500 * time.Millisecond}))

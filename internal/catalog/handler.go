@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -17,9 +18,10 @@ type Handler struct {
 	bindings  *ModelBindingStore
 	prices    *PriceStore
 	prober    *Prober
+	stats     *RoutingStats
 }
 
-func NewHandler(db *sql.DB, providers *ProviderStore, models *ModelStore, prices *PriceStore) *Handler {
+func NewHandler(db *sql.DB, providers *ProviderStore, models *ModelStore, prices *PriceStore, stats *RoutingStats) *Handler {
 	return &Handler{
 		db:        db,
 		providers: providers,
@@ -27,6 +29,7 @@ func NewHandler(db *sql.DB, providers *ProviderStore, models *ModelStore, prices
 		bindings:  NewModelBindingStore(db),
 		prices:    prices,
 		prober:    NewProber(nil),
+		stats:     stats,
 	}
 }
 
@@ -619,4 +622,133 @@ func (h *Handler) SetModelPrice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOut(w, 200, map[string]any{"id": price.ID, "model_id": id, "currency": price.Currency})
+}
+
+// ---- routing ----
+
+// parseBindingIDParam parses the {bindingID} URL param. Returns (0, false) and
+// writes a 400 on parse failure.
+func parseBindingIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "bindingID"), 10, 64)
+	if err != nil {
+		jsonErr(w, 400, "invalid binding id")
+		return 0, false
+	}
+	return id, true
+}
+
+// GetRoutingStatus 返回所有 enabled model 的 bindings + 6 格时间轴 + 24h 平均延迟。
+func (h *Handler) GetRoutingStatus(w http.ResponseWriter, r *http.Request) {
+	models, err := h.models.ListEnabled()
+	if err != nil {
+		jsonErr(w, 500, "failed to list models")
+		return
+	}
+	now := time.Now()
+	type bindingOut struct {
+		BindingID      int64    `json:"binding_id"`
+		ProviderID    int64    `json:"provider_id"`
+		ProviderName   string   `json:"provider_name"`
+		ProviderStatus string   `json:"provider_status"`
+		UpstreamModel  string   `json:"upstream_model"`
+		Priority       int      `json:"priority"`
+		Weight         int      `json:"weight"`
+		Enabled        bool     `json:"enabled"`
+		Timeline       []string `json:"timeline"`
+		AvgLatencyMs   int64    `json:"avg_latency_ms"`
+		LastRequestAt  *string  `json:"last_request_at"`
+	}
+	type modelOut struct {
+		ModelID         int64        `json:"model_id"`
+		Name            string       `json:"name"`
+		Enabled         bool         `json:"enabled"`
+		RoutingStrategy string       `json:"routing_strategy"`
+		AutoMode        string       `json:"auto_mode"`
+		Bindings        []bindingOut `json:"bindings"`
+	}
+	out := struct {
+		Models []modelOut `json:"models"`
+	}{Models: []modelOut{}}
+
+	for _, m := range models {
+		bindings, err := h.bindings.ListByModel(m.ID)
+		if err != nil {
+			continue
+		}
+		mo := modelOut{
+			ModelID:         m.ID,
+			Name:            m.Name,
+			Enabled:         m.Enabled,
+			RoutingStrategy: m.RoutingStrategy,
+			AutoMode:        m.AutoMode,
+			Bindings:        []bindingOut{},
+		}
+		for _, b := range bindings {
+			provider, err := h.providers.Get(b.ProviderID)
+			if err != nil {
+				continue
+			}
+			bo := bindingOut{
+				BindingID:      b.ID,
+				ProviderID:     b.ProviderID,
+				ProviderName:   provider.Name,
+				ProviderStatus: provider.Status,
+				UpstreamModel:  b.UpstreamModel,
+				Priority:       b.Priority,
+				Weight:         b.Weight,
+				Enabled:        b.Enabled,
+				Timeline:       []string{},
+			}
+			if h.stats != nil {
+				tl, err := h.stats.BindingTimeline(b.ProviderID, b.UpstreamModel, now)
+				if err == nil {
+					bo.AvgLatencyMs = tl.AvgLatencyMs
+					for _, bk := range tl.Buckets {
+						bo.Timeline = append(bo.Timeline, bk.Status)
+					}
+					if tl.LastRequestAt != nil {
+						s := tl.LastRequestAt.Format(time.RFC3339)
+						bo.LastRequestAt = &s
+					}
+				}
+			}
+			mo.Bindings = append(mo.Bindings, bo)
+		}
+		out.Models = append(out.Models, mo)
+	}
+	jsonOut(w, 200, out)
+}
+
+// GetBindingMetrics 返回某 binding 的 24h 性能详情。
+func (h *Handler) GetBindingMetrics(w http.ResponseWriter, r *http.Request) {
+	bindingID, ok := parseBindingIDParam(w, r)
+	if !ok {
+		return
+	}
+	binding, err := h.bindings.Get(bindingID)
+	if err != nil {
+		jsonErr(w, 404, "binding not found")
+		return
+	}
+	provider, err := h.providers.Get(binding.ProviderID)
+	if err != nil {
+		jsonErr(w, 404, "provider not found")
+		return
+	}
+	m, err := h.stats.BindingMetrics(binding.ProviderID, binding.UpstreamModel, time.Now())
+	if err != nil {
+		jsonErr(w, 500, "failed to compute metrics")
+		return
+	}
+	jsonOut(w, 200, map[string]any{
+		"binding_id":          binding.ID,
+		"provider_id":         binding.ProviderID,
+		"provider_name":       provider.Name,
+		"upstream_model":      binding.UpstreamModel,
+		"avg_latency_ms":      m.AvgLatencyMs,
+		"avg_ttft_ms":         m.AvgTtftMs,
+		"throughput_per_hour": m.ThroughputPerHour,
+		"total_requests_24h":  m.TotalRequests24h,
+		"success_rate":        m.SuccessRate,
+	})
 }

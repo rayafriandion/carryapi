@@ -23,7 +23,7 @@ func adminCtx() context.Context {
 
 func TestProviderCRUDHandler(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Post("/api/providers", h.CreateProvider)
 	r.With(middleware.RequireRole("admin")).Get("/api/providers", h.ListProviders)
@@ -51,7 +51,7 @@ func TestProviderCRUDHandler(t *testing.T) {
 
 func TestProviderCRUDNonAdminForbidden(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Post("/api/providers", h.CreateProvider)
 	// 非 admin context
@@ -67,7 +67,7 @@ func TestProviderCRUDNonAdminForbidden(t *testing.T) {
 
 func TestModelCRUDHandler(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Post("/api/models", h.CreateModel)
 	r.With(middleware.RequireRole("admin")).Get("/api/models", h.ListModels)
@@ -103,7 +103,7 @@ func TestModelCRUDHandler(t *testing.T) {
 
 func TestInvalidIDParamReturns400(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Put("/api/providers/{id}", h.UpdateProvider)
 	// 非数字 id -> 400 invalid id
@@ -121,7 +121,7 @@ func TestInvalidIDParamReturns400(t *testing.T) {
 
 func TestPriceHandler(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	r := chi.NewRouter()
 	r.With(middleware.RequireRole("admin")).Put("/api/models/{id}/price", h.SetModelPrice)
 	r.With(middleware.RequireRole("admin")).Get("/api/models/{id}/price", h.GetModelPrice)
@@ -151,7 +151,7 @@ func TestPriceHandler(t *testing.T) {
 
 func newTestHandler(t *testing.T) (*Handler, *httptest.Server) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}`))
 	}))
@@ -259,7 +259,7 @@ func TestTestProviderOK(t *testing.T) {
 
 func TestTestProviderFailure(t *testing.T) {
 	f := newCatalogFixture(t)
-	h := NewHandler(f.db, f.providers, f.models, f.prices)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
 	// dead/unreachable upstream URL
 	f.providers.Create("Dead", "http://127.0.0.1:1", "sk-test", "openai_chat")
 	h.SetProber(NewProber(&http.Client{Timeout: 500 * time.Millisecond}))
@@ -279,5 +279,89 @@ func TestTestProviderFailure(t *testing.T) {
 	}
 	if errMsg, _ := resp["error"].(string); errMsg == "" {
 		t.Fatalf("resp=%+v, want non-empty error", resp)
+	}
+}
+
+func TestGetRoutingStatus(t *testing.T) {
+	f := newCatalogFixture(t)
+	rs := NewRoutingStats(f.db)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, rs)
+	r := chi.NewRouter()
+	r.With(middleware.RequireRole("admin")).Get("/api/routing/status", h.GetRoutingStatus)
+
+	p, _ := f.providers.Create("OpenAI", "https://api.openai.com/v1", "k", "openai_chat")
+	m, _ := f.models.Create("my-gpt4", p.ID, "gpt-4o")
+	_, _ = f.bindingsStore().Create(m.ID, p.ID, "gpt-4o", 100, 1, true)
+	insertLog(t, f.db, p.ID, "gpt-4o", 200, "none", 1*time.Hour, 100, 50)
+
+	req := httptest.NewRequest("GET", "/api/routing/status", nil)
+	req = req.WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Models []struct {
+			Name     string `json:"name"`
+			Bindings []struct {
+				ProviderID    int64    `json:"provider_id"`
+				UpstreamModel string   `json:"upstream_model"`
+				Timeline      []string `json:"timeline"`
+				AvgLatencyMs  int64    `json:"avg_latency_ms"`
+			} `json:"bindings"`
+		} `json:"models"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.Models) != 1 || resp.Models[0].Name != "my-gpt4" {
+		t.Fatalf("unexpected models: %+v", resp.Models)
+	}
+	if len(resp.Models[0].Bindings) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(resp.Models[0].Bindings))
+	}
+	b := resp.Models[0].Bindings[0]
+	if len(b.Timeline) != 6 {
+		t.Errorf("expected 6 timeline buckets, got %d", len(b.Timeline))
+	}
+	if b.AvgLatencyMs != 100 {
+		t.Errorf("expected avg latency 100, got %d", b.AvgLatencyMs)
+	}
+}
+
+func TestGetBindingMetrics(t *testing.T) {
+	f := newCatalogFixture(t)
+	rs := NewRoutingStats(f.db)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, rs)
+	r := chi.NewRouter()
+	r.With(middleware.RequireRole("admin")).Get("/api/routing/bindings/{bindingID}/metrics", h.GetBindingMetrics)
+
+	p, _ := f.providers.Create("OpenAI", "https://api.openai.com/v1", "k", "openai_chat")
+	m, _ := f.models.Create("my-gpt4", p.ID, "gpt-4o")
+	// models.Create auto-creates the first binding; fetch it rather than
+	// re-creating (which would violate the unique constraint).
+	bs, _ := f.bindingsStore().ListByModel(m.ID)
+	if len(bs) != 1 {
+		t.Fatalf("expected 1 auto-created binding, got %d", len(bs))
+	}
+	b := bs[0]
+	insertLog(t, f.db, p.ID, "gpt-4o", 200, "none", 1*time.Hour, 100, 50)
+
+	req := httptest.NewRequest("GET", "/api/routing/bindings/"+strconv.FormatInt(b.ID, 10)+"/metrics", nil)
+	req = req.WithContext(adminCtx())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		AvgLatencyMs int64 `json:"avg_latency_ms"`
+		AvgTtftMs    int64 `json:"avg_ttft_ms"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.AvgLatencyMs != 100 {
+		t.Errorf("avg latency: expected 100, got %d", resp.AvgLatencyMs)
+	}
+	if resp.AvgTtftMs != 50 {
+		t.Errorf("avg ttft: expected 50, got %d", resp.AvgTtftMs)
 	}
 }

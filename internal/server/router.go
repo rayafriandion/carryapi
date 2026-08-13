@@ -130,6 +130,8 @@ func (s *Server) buildRouter() http.Handler {
 					r.Put("/api/models/{id}/routing", deps.Catalog.UpdateModelRouting)
 					r.Get("/api/models/{id}/price", deps.Catalog.GetModelPrice)
 					r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
+					r.Get("/api/routing/status", deps.Catalog.GetRoutingStatus)
+					r.Get("/api/routing/bindings/{bindingID}/metrics", deps.Catalog.GetBindingMetrics)
 				}
 				r.Get("/api/gateway/info", s.handleGatewayInfo)
 			})

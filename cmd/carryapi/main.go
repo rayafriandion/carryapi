@@ -59,8 +59,8 @@ func main() {
 	catModel := catalog.NewModelStore(d)
 	catBindings := catalog.NewModelBindingStore(d)
 	catPrice := catalog.NewPriceStore(d)
-	catalogH := catalog.NewHandler(d, catProv, catModel, catPrice)
 	routingStats := catalog.NewRoutingStats(d)
+	catalogH := catalog.NewHandler(d, catProv, catModel, catPrice, routingStats)
 	healthCache := catalog.NewHealthCache(catBindings, catProv, routingStats)
 
 	// WebAuthn (passkey) Relying Party config. Defaults target local dev

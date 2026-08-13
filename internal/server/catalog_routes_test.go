@@ -43,6 +43,7 @@ func newCatalogServer(t *testing.T) *Server {
 			catalog.NewProviderStore(d, cipher),
 			catalog.NewModelStore(d),
 			catalog.NewPriceStore(d),
+			nil,
 		),
 	})
 }

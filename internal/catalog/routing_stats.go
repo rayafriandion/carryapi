@@ -73,11 +73,11 @@ func (s *RoutingStats) BindingTimeline(providerID int64, upstreamModel string, n
 		  ) AS bucket,
 		  COUNT(CASE WHEN error_type != 'client_disconnect' THEN 1 END) AS total,
 		  SUM(CASE WHEN status_code = 200 AND error_type = 'none' THEN 1 ELSE 0 END) AS success
-		FROM request_logs
-		WHERE provider_id = ? AND upstream_model = ?
-		  AND created_at >= ? AND created_at < ?
-		GROUP BY bucket
-		ORDER BY bucket`,
+		  FROM request_logs
+		  WHERE provider_id = ? AND upstream_model = ?
+		    AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+		  GROUP BY bucket
+		  ORDER BY bucket`,
 		providerID, upstreamModel,
 		start.UTC().Format(time.RFC3339), localNow.UTC().Format(time.RFC3339))
 	if err != nil {
@@ -111,12 +111,12 @@ func (s *RoutingStats) BindingTimeline(providerID int64, upstreamModel string, n
 
 	// 24h 平均延迟
 	var avgLatency sql.NullInt64
-	_ = s.db.QueryRow(`SELECT AVG(duration_ms) FROM request_logs WHERE provider_id=? AND upstream_model=? AND created_at>=? AND created_at<? AND duration_ms IS NOT NULL`,
+	_ = s.db.QueryRow(`SELECT AVG(duration_ms) FROM request_logs WHERE provider_id=? AND upstream_model=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?) AND duration_ms IS NOT NULL`,
 		providerID, upstreamModel, start.UTC().Format(time.RFC3339), localNow.UTC().Format(time.RFC3339)).Scan(&avgLatency)
 
 	// 最近请求时间
 	var lastReq sql.NullString
-	_ = s.db.QueryRow(`SELECT created_at FROM request_logs WHERE provider_id=? AND upstream_model=? ORDER BY created_at DESC LIMIT 1`,
+	_ = s.db.QueryRow(`SELECT datetime(created_at) FROM request_logs WHERE provider_id=? AND upstream_model=? ORDER BY created_at DESC LIMIT 1`,
 		providerID, upstreamModel).Scan(&lastReq)
 
 	tl := &BindingTimeline{
@@ -126,7 +126,9 @@ func (s *RoutingStats) BindingTimeline(providerID int64, upstreamModel string, n
 		AvgLatencyMs:  avgLatency.Int64,
 	}
 	if lastReq.Valid {
-		t, err := time.Parse(time.RFC3339, lastReq.String)
+		// datetime() normalizes both CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS")
+		// and RFC3339 text to "YYYY-MM-DD HH:MM:SS" (UTC).
+		t, err := time.Parse("2006-01-02 15:04:05", lastReq.String)
 		if err == nil {
 			tl.LastRequestAt = &t
 		}
@@ -142,10 +144,10 @@ func (s *RoutingStats) BindingHealth(providerID int64, upstreamModel string, now
 	err := s.db.QueryRow(`
 		SELECT
 		  COUNT(CASE WHEN error_type != 'client_disconnect' THEN 1 END),
-		  SUM(CASE WHEN status_code = 200 AND error_type = 'none' THEN 1 ELSE 0 END)
+		  COALESCE(SUM(CASE WHEN status_code = 200 AND error_type = 'none' THEN 1 ELSE 0 END), 0)
 		FROM request_logs
 		WHERE provider_id = ? AND upstream_model = ?
-		  AND created_at >= ? AND created_at < ?`,
+		  AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)`,
 		providerID, upstreamModel,
 		start.UTC().Format(time.RFC3339), localNow.UTC().Format(time.RFC3339)).Scan(&total, &success)
 	if err != nil {
@@ -164,10 +166,10 @@ func (s *RoutingStats) BindingMetrics(providerID int64, upstreamModel string, no
 		SELECT
 		  AVG(duration_ms), AVG(ttft_ms),
 		  COUNT(*),
-		  SUM(CASE WHEN status_code = 200 AND error_type = 'none' THEN 1 ELSE 0 END)
+		  COALESCE(SUM(CASE WHEN status_code = 200 AND error_type = 'none' THEN 1 ELSE 0 END), 0)
 		FROM request_logs
 		WHERE provider_id = ? AND upstream_model = ?
-		  AND created_at >= ? AND created_at < ?`,
+		  AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)`,
 		providerID, upstreamModel,
 		start.UTC().Format(time.RFC3339), localNow.UTC().Format(time.RFC3339)).Scan(&avgLatency, &avgTtft, &total, &success)
 	if err != nil {

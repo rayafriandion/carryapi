@@ -69,49 +69,72 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request, downstream s
 	}
 	rc.requestedModel = irReq.Model
 
-	// 3. 模型解析
-	model, provider, price, err := p.resolveModel(irReq.Model)
+	resolved, err := p.resolveModel(irReq.Model)
 	if err != nil {
 		p.writeError(w, rc, asIRError(err))
 		return
 	}
-	rc.model = model
-	rc.provider = provider
-	rc.price = price
+	rc.model = resolved.model
+	rc.provider = resolved.provider
+	rc.selected = resolved.selected
+	rc.candidates = resolved.candidates
+	rc.price = resolved.price
 
-	// 4. 配额预检
 	if err := p.checkQuota(u, ak.ID); err != nil {
 		p.writeError(w, rc, asIRError(err))
 		return
 	}
 
-	// 5. 编码为上游格式
+	if err := p.forwardSelected(w, r, rc, irReq, downstream, *resolved.selected, resolved.candidates); err != nil {
+		p.writeError(w, rc, asIRError(err))
+	}
+}
+
+func (p *Proxy) forwardSelected(w http.ResponseWriter, r *http.Request, rc *requestContext, irReq *ir.Request, downstream string, selected catalog.SelectedBinding, candidates []catalog.ModelBinding) error {
+	provider := selected.Provider
+	irReq.Model = selected.UpstreamModel
 	upstreamPayload, err := encodeUpstreamRequest(provider.Protocol, irReq)
 	if err != nil {
-		p.writeError(w, rc, ir.NewError("internal", "encode_failed", "failed to encode upstream request", 500))
-		return
+		return ir.NewError("internal", "encode_failed", "failed to encode upstream request", 500)
 	}
-
-	// 6. 转发
-	upReq, err := p.buildUpstreamRequest(r, provider, upstreamPayload)
+	upReq, err := p.buildUpstreamRequest(r, &provider, upstreamPayload)
 	if err != nil {
-		p.writeError(w, rc, ir.NewError("internal", "upstream_build_failed", "failed to build upstream request", 500))
-		return
+		return ir.NewError("internal", "upstream_build_failed", "failed to build upstream request", 500)
 	}
 	upResp, err := p.deps.Client.Do(upReq)
 	if err != nil {
-		p.writeError(w, rc, ir.NewError("upstream", "upstream_unreachable", "upstream request failed: "+err.Error(), 502))
-		return
+		return p.failoverOrError(r, w, rc, irReq, downstream, selected, candidates,
+			ir.NewError("upstream", "upstream_unreachable", "upstream request failed: "+err.Error(), 502))
 	}
 	defer upResp.Body.Close()
-
-	// 7. 流式 or 非流式
+	rc.firstByteAt = time.Now()
 	rc.stream = irReq.Stream
+	if shouldFailoverStatus(upResp.StatusCode) && rc.model.RoutingStrategy == catalog.RoutingStrategyAuto && rc.model.AutoMode == catalog.AutoModeFailover {
+		body, _ := io.ReadAll(upResp.Body)
+		upResp.Body.Close()
+		return p.failoverOrError(r, w, rc, irReq, downstream, selected, candidates,
+			upstreamErrorFromStatus(upResp.StatusCode, upstreamErrorMessage(provider.Protocol, body)))
+	}
+	rc.provider = &provider
+	rc.selected = &selected
 	if irReq.Stream {
 		p.streamResponse(w, rc, upResp, downstream)
-		return
+		return nil
 	}
 	p.forwardNonStreaming(w, rc, upResp, downstream)
+	return nil
+}
+
+func (p *Proxy) failoverOrError(r *http.Request, w http.ResponseWriter, rc *requestContext, irReq *ir.Request, downstream string, selected catalog.SelectedBinding, candidates []catalog.ModelBinding, fallback *ir.Error) error {
+	next, ok, err := p.getRouter().Next(selected.Binding, candidates)
+	if err != nil || !ok {
+		return fallback
+	}
+	return p.forwardSelected(w, r, rc, irReq, downstream, next, candidates)
+}
+
+func shouldFailoverStatus(status int) bool {
+	return status == 429 || status >= 500
 }
 
 func decodeDownstreamRequest(downstream string, body []byte) (*ir.Request, error) {

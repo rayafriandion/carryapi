@@ -16,12 +16,12 @@ func (p *Proxy) recordStats(rc *requestContext) {
 	}
 	cost := computeCost(rc.price, rc)
 	upstreamModel := ""
-	if rc.model != nil {
-		upstreamModel = rc.model.UpstreamModel
+	if rc.selected != nil {
+		upstreamModel = rc.selected.UpstreamModel
 	}
 	var providerID any
-	if rc.provider != nil {
-		providerID = rc.provider.ID
+	if rc.selected != nil {
+		providerID = rc.selected.Provider.ID
 	}
 	modelName := ""
 	if rc.model != nil {
@@ -32,6 +32,10 @@ func (p *Proxy) recordStats(rc *requestContext) {
 	var durationMs int64
 	if !rc.start.IsZero() {
 		durationMs = time.Since(rc.start).Milliseconds()
+	}
+	var ttftMs any
+	if !rc.firstByteAt.IsZero() && !rc.start.IsZero() {
+		ttftMs = rc.firstByteAt.Sub(rc.start).Milliseconds()
 	}
 	errorType := rc.errorType
 	if errorType == "" {
@@ -44,11 +48,11 @@ func (p *Proxy) recordStats(rc *requestContext) {
 	_, _ = p.deps.DB.Exec(
 		`INSERT INTO request_logs(request_id, user_id, api_key_id, custom_model, provider_id, upstream_model,
 		 protocol_in, protocol_out, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-		 cost, duration_ms, status_code, error_type, error_message, stream)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 cost, duration_ms, status_code, error_type, error_message, stream, ttft_ms)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rc.requestID, userID, apiKeyID, modelName, providerID, upstreamModel,
 		rc.downstream, protocolOutName(rc.provider), rc.inputTokens, rc.outputTokens,
-		rc.cacheRead, rc.cacheCreation, cost, durationMs, rc.statusCode, errorType, errorMessage, rc.stream)
+		rc.cacheRead, rc.cacheCreation, cost, durationMs, rc.statusCode, errorType, errorMessage, rc.stream, ttftMs)
 
 	// 配额累加(仅成功且有用户上下文;errorType 非空表示失败,含中途断流的流式请求)
 	if rc.user != nil && rc.statusCode == 200 && rc.errorType == "" {

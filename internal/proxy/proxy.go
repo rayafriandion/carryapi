@@ -17,20 +17,34 @@ type Deps struct {
 	Keys      *apikey.Store
 	Users     *user.Store
 	Models    *catalog.ModelStore
+	Bindings  *catalog.ModelBindingStore
 	Providers *catalog.ProviderStore
 	Prices    *catalog.PriceStore
 	Client    *http.Client
 }
 
 type Proxy struct {
-	deps Deps
+	deps    Deps
+	router  *catalog.Router
+	health  *bindingHealth
 }
 
 func NewProxy(deps Deps) *Proxy {
 	if deps.Client == nil {
 		deps.Client = &http.Client{}
 	}
-	return &Proxy{deps: deps}
+	if deps.Bindings == nil {
+		deps.Bindings = catalog.NewModelBindingStore(deps.DB)
+	}
+	health := newBindingHealth()
+	return &Proxy{deps: deps, health: health, router: nil}
+}
+
+func (p *Proxy) getRouter() *catalog.Router {
+	if p.router == nil {
+		p.router = catalog.NewRouter(p.deps.Providers, p.health)
+	}
+	return p.router
 }
 
 // writeJSON 写 JSON 响应(catalog 包的 jsonOut 是 handler 私有,不可见,故在 proxy 包内定义)。
@@ -48,9 +62,12 @@ type requestContext struct {
 	requestID      string
 	stream         bool      // 流式请求(记录到日志)
 	start          time.Time // 请求开始时间(算 duration_ms)
+	firstByteAt    time.Time // 上游首字节到达时间(算 ttft_ms)
 	requestedModel string    // 客户端请求中的模型名(resolveModel 失败时仍用于统计)
 	model          *catalog.Model
 	provider       *catalog.Provider
+	selected       *catalog.SelectedBinding
+	candidates     []catalog.ModelBinding
 	price          *catalog.Price
 	// 统计
 	inputTokens   int

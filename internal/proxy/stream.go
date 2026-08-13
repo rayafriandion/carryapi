@@ -3,9 +3,13 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"carryapi/internal/ir"
 )
@@ -48,13 +52,19 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, rc *requestContext, upResp
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(200)
 	rc.statusCode = 200
+	rc.firstByteAt = time.Now()
 
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(upResp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	scanner.Split(splitSSERecords) // 按空行分割(SSE 事件)
 
+	firstByte := true
 	for scanner.Scan() {
+		if firstByte {
+			rc.firstByteAt = time.Now()
+			firstByte = false
+		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -85,10 +95,22 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, rc *requestContext, upResp
 	}
 	// 流中途失败(scanner 错误,如上游提前断开/超长行):记录错误类型但不改已写头的状态码。
 	if err := scanner.Err(); err != nil {
-		rc.errorType = "upstream"
+		if isClientDisconnect(err) {
+			rc.errorType = "client_disconnect"
+		} else {
+			rc.errorType = "upstream"
+		}
 		rc.errorMessage = "stream read error: " + err.Error()
 	}
 	p.recordStats(rc)
+}
+
+// isClientDisconnect 判定流读错误是否源于客户端断开(context 取消/管道关闭/broken pipe)。
+// 这类错误不计入上游健康(success-rate 统计排除 client_disconnect)。
+func isClientDisconnect(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		strings.Contains(err.Error(), "broken pipe")
 }
 
 // extractDataPayload 从 SSE 事件块中提取所有 data: 负载并拼接。

@@ -320,7 +320,7 @@ async function onFetchModels() {
   fetchedModels.value = []
   importSelected.value = []
   try {
-    const res = await http.get(`/api/providers/${importProviderId.value}/models/fetch`)
+    const res = await http.post(`/api/providers/${importProviderId.value}/models/fetch`)
     fetchedModels.value = res.data?.models || []
   } catch (e) {
     message.error(errorMessage(e))

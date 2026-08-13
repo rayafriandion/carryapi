@@ -12,7 +12,16 @@
 
     <n-spin :show="loading">
       <div v-if="viewMode === 'card'" class="card-grid">
-        <n-card v-for="m in models" :key="m.id" class="model-card" hoverable>
+        <n-card
+          v-for="m in models"
+          :key="m.id"
+          class="model-card"
+          hoverable
+          role="button"
+          tabindex="0"
+          @click="openDetail(m.id)"
+          @keyup.enter="openDetail(m.id)"
+        >
           <div class="model-head">
             <n-text strong>{{ m.name }}</n-text>
             <n-space :size="6" align="center">
@@ -20,9 +29,22 @@
               <n-tag size="small" :type="successTagType(m.success_rate)">{{ formatPercent(m.success_rate) }}</n-tag>
             </n-space>
           </div>
-          <div class="model-meta">
-            <span>供应商: {{ m.provider_name }}</span>
-            <span>上游模型: {{ m.upstream_model }}</span>
+          <div class="bindings">
+            <div class="bindings-title">
+              上游绑定 <n-tag size="tiny" :bordered="false">{{ (m.bindings || []).length }}</n-tag>
+            </div>
+            <div class="binding-tags">
+              <n-tag
+                v-for="(b, i) in (m.bindings || [])"
+                :key="i"
+                size="small"
+                :bordered="false"
+                :type="b.enabled ? 'default' : 'warning'"
+              >
+                {{ b.provider_name }} / {{ b.upstream_model }}
+              </n-tag>
+              <span v-if="!(m.bindings || []).length" class="muted">—</span>
+            </div>
           </div>
           <div class="price-grid">
             <div><span class="label">输入</span><span class="value">{{ formatPrice(m.input_price, m.currency) }}</span></div>
@@ -38,7 +60,14 @@
       </div>
 
       <n-card v-else class="section">
-        <n-data-table :columns="columns" :data="models" :pagination="false" :bordered="false" size="small" />
+        <n-data-table
+          :columns="columns"
+          :data="models"
+          :pagination="false"
+          :bordered="false"
+          size="small"
+          :row-props="(row: CatalogModel) => ({ style: 'cursor: pointer', onClick: () => openDetail(row.id) })"
+        />
       </n-card>
     </n-spin>
   </div>
@@ -46,11 +75,22 @@
 
 <script setup lang="ts">
 import { h, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NCard, NRadioGroup, NRadioButton, NSpin, NTag, NText, NDataTable, NSpace,
   useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+
+interface CatalogBinding {
+  provider_id: number
+  provider_name: string
+  protocol: string
+  upstream_model: string
+  priority: number
+  weight: number
+  enabled: boolean
+}
 
 interface CatalogModel {
   id: number
@@ -58,6 +98,7 @@ interface CatalogModel {
   upstream_model: string
   provider_name: string
   protocol: string
+  bindings: CatalogBinding[]
   input_price: number | null
   output_price: number | null
   cache_read_price: number | null
@@ -68,6 +109,7 @@ interface CatalogModel {
   avg_duration_ms: number
 }
 
+const router = useRouter()
 const message = useMessage()
 const models = ref<CatalogModel[]>([])
 const loading = ref(false)
@@ -86,16 +128,31 @@ function formatLatency(v: number): string {
   if (!v) return '—'
   return `${v.toFixed(0)} ms`
 }
-function successTagType(rate: number): 'success' | 'warning' | 'error' {
+function successTagType(rate: number): 'success' | 'warning' | 'error' | 'default' {
   if (rate >= 95) return 'success'
   if (rate >= 80) return 'warning'
-  return 'error'
+  if (rate > 0) return 'error'
+  return 'default'
+}
+
+function openDetail(id: number) {
+  router.push({ name: 'model-catalog-detail', params: { id } })
+}
+
+function renderBindingTags(row: CatalogModel) {
+  const bindings = row.bindings || []
+  if (!bindings.length) return '—'
+  return h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' },
+    bindings.map((b) => h(NTag, {
+      size: 'small',
+      bordered: false,
+      type: b.enabled ? 'default' : 'warning',
+    }, { default: () => b.enabled ? `${b.provider_name} / ${b.upstream_model}` : `${b.provider_name} / ${b.upstream_model} (停用)` })))
 }
 
 const columns = [
   { title: '模型名称', key: 'name' },
-  { title: '供应商', key: 'provider_name' },
-  { title: '上游模型', key: 'upstream_model' },
+  { title: '上游绑定', key: 'bindings', render: renderBindingTags },
   {
     title: '币种',
     key: 'currency',
@@ -160,25 +217,44 @@ onMounted(async () => {
 .card-grid {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 12px;
 }
 .model-card {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.model-card:focus-visible {
+  box-shadow: 0 0 0 2px var(--n-primary-color, #2080f0);
 }
 .model-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.model-meta {
+.bindings {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+.bindings-title {
   color: #666;
   font-size: 12px;
-  gap: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.binding-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.muted {
+  color: #bbb;
+  font-size: 12px;
 }
 .price-grid {
   display: grid;

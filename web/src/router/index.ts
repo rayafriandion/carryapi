@@ -13,6 +13,7 @@ const router = createRouter({
       { path: 'logs', name: 'logs', component: () => import('../views/LogsView.vue') },
       { path: 'keys', name: 'keys', component: () => import('../views/KeysView.vue') },
       { path: 'models-catalog', name: 'models-catalog', component: () => import('../views/ModelListView.vue') },
+      { path: 'models-catalog/:id', name: 'model-catalog-detail', component: () => import('../views/ModelDetailView.vue') },
       { path: 'account', name: 'account', component: () => import('../views/AccountView.vue') },
       // admin-only
       { path: 'models', name: 'models', component: () => import('../views/ModelsView.vue'), meta: { admin: true } },

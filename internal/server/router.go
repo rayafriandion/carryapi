@@ -93,6 +93,7 @@ func (s *Server) buildRouter() http.Handler {
 				if deps.Catalog != nil {
 					// 已登录用户可查看启用模型目录(含价格与全局成功率/延迟)
 					r.Get("/api/catalog", deps.Catalog.ListCatalog)
+					r.Get("/api/catalog/{id}", deps.Catalog.GetCatalogModel)
 				}
 			})
 			// admin only

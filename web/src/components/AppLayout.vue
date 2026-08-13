@@ -33,7 +33,8 @@ const auth = useAuthStore()
 const collapsed = ref(false)
 
 const baseMenus: MenuOption[] = [
-  { label: 'Dashboard', key: 'dashboard' },
+  { label: '仪表盘', key: 'dashboard' },
+  { label: '模型列表', key: 'models-catalog' },
   { label: '统计', key: 'stats' },
   { label: '日志', key: 'logs' },
   { label: 'API Key', key: 'keys' },
@@ -41,9 +42,16 @@ const baseMenus: MenuOption[] = [
 ]
 
 const adminMenus: MenuOption[] = [
-  { label: '模型管理', key: 'models' },
-  { label: '配额管理', key: 'quotas' },
-  { label: '用户管理', key: 'users' },
+  {
+    label: '管理员设置',
+    key: 'admin-settings',
+    children: [
+      { label: '模型管理', key: 'models' },
+      { label: '路由配置', key: 'routing' },
+      { label: '配额管理', key: 'quotas' },
+      { label: '用户管理', key: 'users' },
+    ],
+  },
   { label: '系统设置', key: 'settings' },
 ]
 
@@ -52,6 +60,7 @@ const menuOptions = computed<MenuOption[]>(() => auth.isAdmin ? [...baseMenus, .
 const activeKey = computed(() => (route.name as string) || 'dashboard')
 
 function onMenuSelect(key: string) {
+  if (key === 'admin-settings') return
   router.push({ name: key })
 }
 

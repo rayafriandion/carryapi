@@ -12,9 +12,13 @@ const router = createRouter({
       { path: 'stats', name: 'stats', component: () => import('../views/StatsView.vue') },
       { path: 'logs', name: 'logs', component: () => import('../views/LogsView.vue') },
       { path: 'keys', name: 'keys', component: () => import('../views/KeysView.vue') },
+      { path: 'models-catalog', name: 'models-catalog', component: () => import('../views/ModelListView.vue') },
       { path: 'account', name: 'account', component: () => import('../views/AccountView.vue') },
       // admin-only
       { path: 'models', name: 'models', component: () => import('../views/ModelsView.vue'), meta: { admin: true } },
+      { path: 'routing', name: 'routing', component: () => import('../views/RoutingView.vue'), meta: { requiresAuth: true, admin: true } },
+      { path: 'models/new', name: 'model-new', component: () => import('../views/ModelEditView.vue'), meta: { admin: true } },
+      { path: 'models/:id/edit', name: 'model-edit', component: () => import('../views/ModelEditView.vue'), meta: { admin: true } },
       { path: 'quotas', name: 'quotas', component: () => import('../views/QuotasView.vue'), meta: { admin: true } },
       { path: 'users', name: 'users', component: () => import('../views/UsersView.vue'), meta: { admin: true } },
       { path: 'settings', name: 'settings', component: () => import('../views/SettingsView.vue'), meta: { admin: true } },

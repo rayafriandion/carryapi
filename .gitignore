@@ -8,3 +8,12 @@ carryapi-windows-amd64.exe
 node_modules/
 web/node_modules/
 .mimosa/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+web/dist/
+*.log

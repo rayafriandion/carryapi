@@ -1,1 +1,0 @@
-import{$t as e,wn as t}from"./http-BFtIegGs.js";function n(n,r){return t(n,e=>{e!==void 0&&(r.value=e)}),e(()=>n.value===void 0?r.value:n.value)}var r=(e,t)=>{let n=e.__vccOpts||e;for(let[e,r]of t)n[e]=r;return n};export{n,r as t};

@@ -1,1 +1,0 @@
-import{Vt as e,_n as t,hn as n}from"./http-BFtIegGs.js";import{i as r}from"./render-B6RXEyT6.js";var i=r?document?.fonts?.ready:void 0,a=!1;i===void 0?a=!0:i.then(()=>{a=!0});function o(e){if(a)return;let r=!1;t(()=>{a||i?.then(()=>{r||e()})}),n(()=>{r=!0})}var{c:s}=e(),c=`vueuc-style`;export{c as n,o as r,s as t};

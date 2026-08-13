@@ -144,42 +144,28 @@ func (s *ModelStore) listWhere(cond string) ([]Model, error) {
 	return out, rows.Err()
 }
 
-func (s *ModelStore) Update(id int64, name string, providerID int64, upstreamModel string, enabled bool) error {
+func (s *ModelStore) Update(id int64, name string, enabled bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := s.updateInTx(tx, id, name, providerID, upstreamModel, enabled); err != nil {
+	if err := s.updateInTx(tx, id, name, enabled); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// UpdateInTx 在已有事务中更新模型及其首条绑定。
-func (s *ModelStore) UpdateInTx(tx *sql.Tx, id int64, name string, providerID int64, upstreamModel string, enabled bool) error {
-	return s.updateInTx(tx, id, name, providerID, upstreamModel, enabled)
+// UpdateInTx 在已有事务中更新模型的 name + enabled。binding 不再由此处维护,
+// 改由 RoutingView 的 binding CRUD API 专门管理。
+func (s *ModelStore) UpdateInTx(tx *sql.Tx, id int64, name string, enabled bool) error {
+	return s.updateInTx(tx, id, name, enabled)
 }
 
-func (s *ModelStore) updateInTx(tx *sql.Tx, id int64, name string, providerID int64, upstreamModel string, enabled bool) error {
-	if _, err := tx.Exec(
-		`UPDATE custom_models SET name=?, provider_id=?, upstream_model=?, enabled=? WHERE id=?`,
-		name, providerID, upstreamModel, enabled, id); err != nil {
-		return err
-	}
-	var bindingID int64
-	err := tx.QueryRow(`SELECT id FROM model_bindings WHERE model_id=? ORDER BY priority, id LIMIT 1`, id).Scan(&bindingID)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		_, err = tx.Exec(
-			`INSERT INTO model_bindings(model_id, provider_id, upstream_model, priority, weight, enabled)
-			 VALUES(?, ?, ?, 100, 1, ?)`,
-			id, providerID, upstreamModel, enabled)
-	case err == nil:
-		_, err = tx.Exec(
-			`UPDATE model_bindings SET provider_id=?, upstream_model=?, enabled=? WHERE id=?`,
-			providerID, upstreamModel, enabled, bindingID)
-	}
+func (s *ModelStore) updateInTx(tx *sql.Tx, id int64, name string, enabled bool) error {
+	_, err := tx.Exec(
+		`UPDATE custom_models SET name=?, enabled=? WHERE id=?`,
+		name, enabled, id)
 	return err
 }
 

@@ -336,8 +336,6 @@ func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Name            string `json:"name"`
-		ProviderID      int64  `json:"provider_id"`
-		UpstreamModel   string `json:"upstream_model"`
 		Enabled         *bool  `json:"enabled"`
 		RoutingStrategy string `json:"routing_strategy"`
 		AutoMode        string `json:"auto_mode"`
@@ -367,7 +365,7 @@ func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if err := h.models.UpdateInTx(tx, id, req.Name, req.ProviderID, req.UpstreamModel, enabled); err != nil {
+	if err := h.models.UpdateInTx(tx, id, req.Name, enabled); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
 	}

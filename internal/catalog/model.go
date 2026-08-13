@@ -41,8 +41,11 @@ func (s *ModelStore) Create(name string, providerID int64, upstreamModel string)
 		return Model{}, fmt.Errorf("create model: %w", err)
 	}
 	defer tx.Rollback()
-	id, err := s.createInTx(tx, name, providerID, upstreamModel, true)
+	id, err := s.CreateInTx(tx, name, providerID, upstreamModel, true)
 	if err != nil {
+		return Model{}, err
+	}
+	if err := s.CreateBindingInTx(tx, id, providerID, upstreamModel, 100, 1, true); err != nil {
 		return Model{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -51,12 +54,9 @@ func (s *ModelStore) Create(name string, providerID int64, upstreamModel string)
 	return s.Get(id)
 }
 
-// CreateInTx 在已有事务中创建模型(及首条绑定),返回新模型 id。
+// CreateInTx 在已有事务中创建模型(不含任何 binding),返回新模型 id。
+// 调用方负责在同一事务中插入至少一条 model_bindings。
 func (s *ModelStore) CreateInTx(tx *sql.Tx, name string, providerID int64, upstreamModel string, enabled bool) (int64, error) {
-	return s.createInTx(tx, name, providerID, upstreamModel, enabled)
-}
-
-func (s *ModelStore) createInTx(tx *sql.Tx, name string, providerID int64, upstreamModel string, enabled bool) (int64, error) {
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
@@ -69,13 +69,31 @@ func (s *ModelStore) createInTx(tx *sql.Tx, name string, providerID int64, upstr
 		return 0, fmt.Errorf("create model: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	return id, nil
+}
+
+// CreateBindingInTx 在已有事务中为指定模型插入一条上游绑定。
+func (s *ModelStore) CreateBindingInTx(tx *sql.Tx, modelID, providerID int64, upstreamModel string, priority, weight int, enabled bool) error {
+	if upstreamModel == "" {
+		return errors.New("upstream model is required")
+	}
+	if priority <= 0 {
+		priority = 100
+	}
+	if weight <= 0 {
+		weight = 1
+	}
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO model_bindings(model_id, provider_id, upstream_model, priority, weight, enabled)
-		 VALUES(?, ?, ?, 100, 1, ?)`,
-		id, providerID, upstreamModel, enabledInt); err != nil {
-		return 0, fmt.Errorf("create model binding: %w", err)
+		 VALUES(?, ?, ?, ?, ?, ?)`,
+		modelID, providerID, upstreamModel, priority, weight, enabledInt); err != nil {
+		return fmt.Errorf("create model binding: %w", err)
 	}
-	return id, nil
+	return nil
 }
 
 func (s *ModelStore) CreateDraft(providerID int64, upstreamModel string) (Model, error) {
@@ -85,19 +103,12 @@ func (s *ModelStore) CreateDraft(providerID int64, upstreamModel string) (Model,
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(
-		`INSERT INTO custom_models(name, provider_id, upstream_model, enabled, routing_strategy, auto_mode)
-		 VALUES(?, ?, ?, 0, ?, ?)`,
-		upstreamModel, providerID, upstreamModel, RoutingStrategyAuto, AutoModePriority)
+	id, err := s.CreateInTx(tx, upstreamModel, providerID, upstreamModel, false)
 	if err != nil {
-		return Model{}, fmt.Errorf("create draft model: %w", err)
+		return Model{}, err
 	}
-	id, _ := res.LastInsertId()
-	if _, err := tx.Exec(
-		`INSERT INTO model_bindings(model_id, provider_id, upstream_model, priority, weight, enabled)
-		 VALUES(?, ?, ?, 100, 1, 0)`,
-		id, providerID, upstreamModel); err != nil {
-		return Model{}, fmt.Errorf("create draft model binding: %w", err)
+	if err := s.CreateBindingInTx(tx, id, providerID, upstreamModel, 100, 1, false); err != nil {
+		return Model{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Model{}, fmt.Errorf("create draft model: %w", err)

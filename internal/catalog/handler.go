@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -284,6 +285,13 @@ func (h *Handler) CreateModel(w http.ResponseWriter, r *http.Request) {
 		RoutingStrategy string `json:"routing_strategy"`
 		AutoMode        string `json:"auto_mode"`
 		Enabled         *bool  `json:"enabled"`
+		Bindings        []struct {
+			ProviderID    int64  `json:"provider_id"`
+			UpstreamModel string `json:"upstream_model"`
+			Priority      int    `json:"priority"`
+			Weight        int    `json:"weight"`
+			Enabled       *bool  `json:"enabled"`
+		} `json:"bindings"`
 		modelPriceReq
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -295,9 +303,73 @@ func (h *Handler) CreateModel(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 400, err.Error())
 		return
 	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		jsonErr(w, 400, "name is required")
+		return
+	}
+
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
+	}
+
+	// 归一化 bindings:若未传数组,则用顶层 provider_id/upstream_model 构造一条
+	type bentry struct {
+		ProviderID    int64
+		UpstreamModel string
+		Priority      int
+		Weight        int
+		Enabled       bool
+	}
+	var entries []bentry
+	if len(req.Bindings) > 0 {
+		for i, b := range req.Bindings {
+			bEnabled := true
+			if b.Enabled != nil {
+				bEnabled = *b.Enabled
+			}
+			entries = append(entries, bentry{
+				ProviderID:    b.ProviderID,
+				UpstreamModel: strings.TrimSpace(b.UpstreamModel),
+				Priority:      b.Priority,
+				Weight:        b.Weight,
+				Enabled:       bEnabled,
+			})
+			if entries[i].ProviderID <= 0 {
+				jsonErr(w, 400, fmt.Sprintf("bindings[%d].provider_id is required", i))
+				return
+			}
+			if entries[i].UpstreamModel == "" {
+				jsonErr(w, 400, fmt.Sprintf("bindings[%d].upstream_model is required", i))
+				return
+			}
+		}
+	} else {
+		if req.ProviderID <= 0 {
+			jsonErr(w, 400, "provider_id is required")
+			return
+		}
+		upstreamModel := strings.TrimSpace(req.UpstreamModel)
+		if upstreamModel == "" {
+			jsonErr(w, 400, "upstream_model is required")
+			return
+		}
+		entries = append(entries, bentry{
+			ProviderID: req.ProviderID, UpstreamModel: upstreamModel,
+			Priority: 100, Weight: 1, Enabled: enabled,
+		})
+	}
+	// 校验所有 provider 存在
+	providerIDs := map[int64]struct{}{}
+	for _, e := range entries {
+		providerIDs[e.ProviderID] = struct{}{}
+	}
+	for pid := range providerIDs {
+		if _, err := h.providers.Get(pid); err != nil {
+			jsonErr(w, 400, fmt.Sprintf("provider %d not found", pid))
+			return
+		}
 	}
 
 	tx, err := h.db.Begin()
@@ -306,10 +378,18 @@ func (h *Handler) CreateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	id, err := h.models.CreateInTx(tx, req.Name, req.ProviderID, req.UpstreamModel, enabled)
+	// 主记录使用第一条 binding 作为旧字段(provider_id/upstream_model)兼容
+	first := entries[0]
+	id, err := h.models.CreateInTx(tx, name, first.ProviderID, first.UpstreamModel, enabled)
 	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
+	}
+	for _, e := range entries {
+		if err := h.models.CreateBindingInTx(tx, id, e.ProviderID, e.UpstreamModel, e.Priority, e.Weight, e.Enabled); err != nil {
+			jsonErr(w, 400, err.Error())
+			return
+		}
 	}
 	if req.RoutingStrategy != "" || req.AutoMode != "" {
 		if err := h.models.UpdateRoutingTx(tx, id, req.RoutingStrategy, req.AutoMode); err != nil {

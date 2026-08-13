@@ -57,8 +57,11 @@ func main() {
 	// catalog(上游 provider/模型/价格 管理)
 	catProv := catalog.NewProviderStore(d, cipher)
 	catModel := catalog.NewModelStore(d)
+	catBindings := catalog.NewModelBindingStore(d)
 	catPrice := catalog.NewPriceStore(d)
-	catalogH := catalog.NewHandler(catProv, catModel, catPrice)
+	catalogH := catalog.NewHandler(d, catProv, catModel, catPrice)
+	routingStats := catalog.NewRoutingStats(d)
+	healthCache := catalog.NewHealthCache(catBindings, catProv, routingStats)
 
 	// WebAuthn (passkey) Relying Party config. Defaults target local dev
 	// (localhost:8067); override via env for production deployments.
@@ -82,7 +85,8 @@ func main() {
 	// 上游代理(catalog 的 store 直接注入)
 	proxyInstance := proxy.NewProxy(proxy.Deps{
 		DB: d, Keys: ks, Users: us,
-		Models: catModel, Providers: catProv, Prices: catPrice,
+		Models: catModel, Providers: catProv, Prices: catPrice, Bindings: catBindings,
+		HealthCache: healthCache,
 	})
 
 	// 统计/管理 API handlers
@@ -109,12 +113,15 @@ func main() {
 	// 信号处理
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go healthCache.Start(ctx)
 	go func() {
 		<-stop
 		fmt.Println("\nshutting down...")
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cancelCtx()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown: %v", err)
 		}
 	}()

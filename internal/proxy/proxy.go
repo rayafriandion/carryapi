@@ -13,20 +13,20 @@ import (
 )
 
 type Deps struct {
-	DB        *sql.DB
-	Keys      *apikey.Store
-	Users     *user.Store
-	Models    *catalog.ModelStore
-	Bindings  *catalog.ModelBindingStore
-	Providers *catalog.ProviderStore
-	Prices    *catalog.PriceStore
-	Client    *http.Client
+	DB          *sql.DB
+	Keys        *apikey.Store
+	Users       *user.Store
+	Models      *catalog.ModelStore
+	Bindings    *catalog.ModelBindingStore
+	Providers   *catalog.ProviderStore
+	Prices      *catalog.PriceStore
+	HealthCache catalog.HealthCacheReader
+	Client      *http.Client
 }
 
 type Proxy struct {
-	deps    Deps
-	router  *catalog.Router
-	health  *bindingHealth
+	deps   Deps
+	router *catalog.Router
 }
 
 func NewProxy(deps Deps) *Proxy {
@@ -36,13 +36,12 @@ func NewProxy(deps Deps) *Proxy {
 	if deps.Bindings == nil {
 		deps.Bindings = catalog.NewModelBindingStore(deps.DB)
 	}
-	health := newBindingHealth()
-	return &Proxy{deps: deps, health: health, router: nil}
+	return &Proxy{deps: deps, router: nil}
 }
 
 func (p *Proxy) getRouter() *catalog.Router {
 	if p.router == nil {
-		p.router = catalog.NewRouter(p.deps.Providers, p.health)
+		p.router = catalog.NewRouter(p.deps.Providers, p.deps.HealthCache)
 	}
 	return p.router
 }

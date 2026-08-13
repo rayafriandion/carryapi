@@ -21,43 +21,6 @@
           <n-data-table :columns="modelColumns" :data="models" :loading="modelsLoading" :pagination="false" :bordered="false" />
         </n-card>
       </n-tab-pane>
-
-      <!-- 定价 -->
-      <n-tab-pane name="pricing" tab="定价">
-        <n-card>
-          <div class="toolbar">
-            <n-select
-              v-model:value="priceModelId"
-              :options="modelOptions"
-              placeholder="选择模型"
-              clearable
-              style="width: 280px"
-              @update:value="onSelectModel"
-            />
-          </div>
-          <template v-if="priceModelId">
-            <n-descriptions label-placement="left" bordered :column="1" class="section">
-              <n-descriptions-item label="模型">{{ priceModelName }}</n-descriptions-item>
-              <n-descriptions-item label="输入价格 (每百万 token)">{{ priceForm.input_price }}</n-descriptions-item>
-              <n-descriptions-item label="输出价格 (每百万 token)">{{ priceForm.output_price }}</n-descriptions-item>
-              <n-descriptions-item label="缓存读 (每百万 token)">{{ cacheRead ?? '-' }}</n-descriptions-item>
-              <n-descriptions-item label="缓存写 (每百万 token)">{{ cacheWrite ?? '-' }}</n-descriptions-item>
-              <n-descriptions-item label="生效时间">{{ priceEffectiveFrom || '-' }}</n-descriptions-item>
-            </n-descriptions>
-            <div class="edit-section">
-              <p>修改价格:</p>
-              <div class="price-fields">
-                <n-input-number v-model:value="priceForm.input_price" placeholder="输入价格" />
-                <n-input-number v-model:value="priceForm.output_price" placeholder="输出价格" />
-                <n-input-number v-model:value="cacheRead" placeholder="缓存读(可选)" clearable />
-                <n-input-number v-model:value="cacheWrite" placeholder="缓存写(可选)" clearable />
-              </div>
-              <n-button type="primary" :loading="savingPrice" @click="onSavePrice">保存价格</n-button>
-            </div>
-          </template>
-          <n-empty v-else description="请选择要配置价格的模型" />
-        </n-card>
-      </n-tab-pane>
     </n-tabs>
 
     <!-- 供应商新建/编辑 -->
@@ -83,27 +46,6 @@
         <div class="modal-footer">
           <n-button @click="providerShow = false">取消</n-button>
           <n-button type="primary" :loading="providerSaving" @click="onProviderSave">保存</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- 模型新建/编辑 -->
-    <n-modal v-model:show="modelShow" preset="card" :title="modelEditing ? '编辑模型' : '新建模型'" style="width: 460px">
-      <n-form>
-        <n-form-item label="名称">
-          <n-input v-model:value="modelForm.name" placeholder="对外模型名,例如 gpt-4o" />
-        </n-form-item>
-        <n-form-item label="供应商">
-          <n-select v-model:value="modelForm.provider_id" :options="providerOptions" />
-        </n-form-item>
-        <n-form-item label="上游模型">
-          <n-input v-model:value="modelForm.upstream_model" placeholder="上游实际模型名" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <div class="modal-footer">
-          <n-button @click="modelShow = false">取消</n-button>
-          <n-button type="primary" :loading="modelSaving" @click="onModelSave">保存</n-button>
         </div>
       </template>
     </n-modal>
@@ -135,14 +77,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, h } from 'vue'
+import { useRouter } from 'vue-router'
+import type { DataTableColumns } from 'naive-ui'
 import {
   NButton, NCard, NDataTable, NTabs, NTabPane, NForm, NFormItem, NInput,
-  NInputNumber, NModal, NSelect, NDescriptions, NDescriptionsItem, NEmpty,
+  NModal, NSelect, NEmpty,
   NSwitch, NPopconfirm, NCheckboxGroup, NCheckbox, NSpace, NTag, useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
 
 const message = useMessage()
+const router = useRouter()
 
 const protocolOptions = [
   { label: 'OpenAI Chat', value: 'openai_chat' },
@@ -285,11 +230,9 @@ async function onProviderTest(row: any) {
 // ---- models ----
 const models = ref<any[]>([])
 const modelsLoading = ref(false)
-const modelColumns = [
+const modelColumns: DataTableColumns<any> = [
   { title: 'ID', key: 'id' },
   { title: '名称', key: 'name' },
-  { title: '供应商 ID', key: 'provider_id' },
-  { title: '上游模型', key: 'upstream_model' },
   {
     title: '启用',
     key: 'enabled',
@@ -324,61 +267,25 @@ async function loadModels() {
   }
 }
 
-const modelShow = ref(false)
-const modelEditing = ref(false)
-const modelSaving = ref(false)
-const modelForm = reactive({ id: 0, name: '', provider_id: null as number | null, upstream_model: '' })
-
 function openModelCreate() {
-  modelEditing.value = false
-  modelForm.id = 0
-  modelForm.name = ''
-  modelForm.provider_id = null
-  modelForm.upstream_model = ''
-  modelShow.value = true
+  router.push({ name: 'model-new' })
 }
 function openModelEdit(row: any) {
-  modelEditing.value = true
-  modelForm.id = row.id
-  modelForm.name = row.name
-  modelForm.provider_id = row.provider_id
-  modelForm.upstream_model = row.upstream_model
-  modelShow.value = true
-}
-async function onModelSave() {
-  if (!modelForm.name || !modelForm.provider_id || !modelForm.upstream_model) {
-    message.warning('请填写完整信息')
-    return
-  }
-  modelSaving.value = true
-  try {
-    const body = {
-      name: modelForm.name,
-      provider_id: modelForm.provider_id,
-      upstream_model: modelForm.upstream_model,
-    }
-    if (modelEditing.value) {
-      await http.put(`/api/models/${modelForm.id}`, body)
-    } else {
-      await http.post('/api/models', body)
-    }
-    modelShow.value = false
-    message.success('已保存')
-    loadModels()
-  } catch (e) {
-    message.error(errorMessage(e))
-  } finally {
-    modelSaving.value = false
-  }
+  router.push({ name: 'model-edit', params: { id: row.id } })
 }
 async function onToggleModel(row: any, enabled: boolean) {
   try {
-    await http.put(`/api/models/${row.id}`, {
+    const price = row.price || {}
+    const body: any = {
       name: row.name,
-      provider_id: row.provider_id,
-      upstream_model: row.upstream_model,
       enabled,
-    })
+      currency: price.currency || 'USD',
+      input_price: price.input_price ?? 0,
+      output_price: price.output_price ?? 0,
+    }
+    if (price.cache_read_price != null) body.cache_read_price = price.cache_read_price
+    if (price.cache_write_price != null) body.cache_write_price = price.cache_write_price
+    await http.put(`/api/models/${row.id}`, body)
     row.enabled = enabled
     message.success(enabled ? '已启用' : '已禁用')
   } catch (e) {
@@ -436,59 +343,6 @@ async function onImport() {
   }
 }
 
-// ---- pricing ----
-const priceModelId = ref<number | null>(null)
-const priceModelName = computed(() => models.value.find((m) => m.id === priceModelId.value)?.name || '')
-const modelOptions = computed(() => models.value.map((m) => ({ label: `${m.name} (${m.upstream_model})`, value: m.id })))
-const priceForm = reactive({ input_price: 0, output_price: 0 })
-const priceEffectiveFrom = ref('')
-const cacheRead = ref<number | null>(null)
-const cacheWrite = ref<number | null>(null)
-const savingPrice = ref(false)
-
-async function onSelectModel(id: number | null) {
-  priceModelId.value = id
-  if (id == null) return
-  priceForm.input_price = 0
-  priceForm.output_price = 0
-  cacheRead.value = null
-  cacheWrite.value = null
-  priceEffectiveFrom.value = ''
-  try {
-    const res = await http.get(`/api/models/${id}/price`)
-    const price = res.data?.price
-    if (price) {
-      priceForm.input_price = price.input_price ?? 0
-      priceForm.output_price = price.output_price ?? 0
-      cacheRead.value = price.cache_read_price ?? null
-      cacheWrite.value = price.cache_write_price ?? null
-      priceEffectiveFrom.value = price.effective_from || ''
-    }
-  } catch (e) {
-    message.error(errorMessage(e))
-  }
-}
-
-async function onSavePrice() {
-  if (!priceModelId.value) return
-  savingPrice.value = true
-  try {
-    const body: any = {
-      input_price: priceForm.input_price ?? 0,
-      output_price: priceForm.output_price ?? 0,
-    }
-    if (cacheRead.value != null) body.cache_read_price = cacheRead.value
-    if (cacheWrite.value != null) body.cache_write_price = cacheWrite.value
-    await http.put(`/api/models/${priceModelId.value}/price`, body)
-    message.success('价格已保存')
-    onSelectModel(priceModelId.value)
-  } catch (e) {
-    message.error(errorMessage(e))
-  } finally {
-    savingPrice.value = false
-  }
-}
-
 onMounted(async () => {
   await Promise.all([loadProviders(), loadModels()])
 })
@@ -500,18 +354,6 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.section {
-  margin-bottom: 16px;
-}
-.edit-section {
-  margin-top: 16px;
-}
-.price-fields {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
 }
 .modal-footer {
   display: flex;

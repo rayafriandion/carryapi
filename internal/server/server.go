@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"carryapi/internal/api"
@@ -43,11 +45,12 @@ type Server struct {
 	deps       Deps
 	httpServer *http.Server
 	router     http.Handler
-	actualAddr string
+	actualAddr atomic.Value
 }
 
 func New(cfg config.Config, deps Deps) *Server {
 	s := &Server{cfg: cfg, deps: deps}
+	s.actualAddr.Store("")
 	s.buildRouter()
 	s.httpServer = &http.Server{
 		Handler:           s.router,
@@ -62,12 +65,18 @@ func New(cfg config.Config, deps Deps) *Server {
 }
 
 func (s *Server) ListenAndServe() error {
-	ln, err := s.resolveListener()
+	listeners, err := s.resolveListeners()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("carryAPI listening on %s (broadcast=%s)\n", s.actualAddr, broadcastLabel(s.deps.Store))
-	return s.httpServer.Serve(ln)
+	actual := make([]string, 0, len(listeners))
+	for _, ln := range listeners {
+		actual = append(actual, ln.Addr().String())
+	}
+	s.actualAddr.Store(strings.Join(actual, ", "))
+	lc := s.listenerConfig()
+	fmt.Printf("carryAPI listening on %s (broadcast=%s)\n", s.actualAddr.Load(), broadcastLabel(lc))
+	return s.serveListeners(listeners)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -77,9 +86,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-func broadcastLabel(store *settings.Store) string {
-	if listenHost(store) == "0.0.0.0" {
-		return "ON (0.0.0.0, other devices can access)"
+func broadcastLabel(lc listenerConfig) string {
+	if lc.broadcastOn() {
+		return fmt.Sprintf("ON (%s, other devices can access)", lc.mode)
 	}
-	return "OFF (127.0.0.1, localhost only)"
+	return fmt.Sprintf("OFF (%s, localhost only)", lc.mode)
 }

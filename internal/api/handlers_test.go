@@ -342,10 +342,7 @@ func TestKeyCreateAndList(t *testing.T) {
 
 func TestSettingsUpdateAdminOnly(t *testing.T) {
 	f := setupAPI(t)
-	sh := NewSettingsHandler(f.settings)
-	// 普通用户 -> 角色守卫在路由层,handler 本身不校验。
-	// 此测试验证:handler 在 admin 调用时能更新;非 admin 由路由 RequireRole 拦截(403)。
-	// 这里直接测 admin 成功路径:
+	sh := NewSettingsHandler(f.settings, "", false, "default")
 	admin := &user.User{ID: 1, Role: "admin", Status: "active"}
 	body, _ := json.Marshal(map[string]string{"force_2fa": "true"})
 	req := httptest.NewRequest("PUT", "/api/settings", bytes.NewReader(body))
@@ -356,9 +353,42 @@ func TestSettingsUpdateAdminOnly(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("update code=%d", rec.Code)
 	}
-	// 验证写入
 	v, ok, _ := f.settings.Get("force_2fa")
 	if !ok || v != "true" {
 		t.Errorf("force_2fa = %q ok=%v", v, ok)
+	}
+}
+
+func TestSettingsUpdateListenHostRequiresRestart(t *testing.T) {
+	f := setupAPI(t)
+	sh := NewSettingsHandler(f.settings, "", false, "default")
+	admin := &user.User{ID: 1, Role: "admin", Status: "active"}
+	body, _ := json.Marshal(map[string]string{"listen_host": "127.0.0.1"})
+	req := httptest.NewRequest("PUT", "/api/settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	rec := httptest.NewRecorder()
+	sh.Update(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("update code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	v, ok, _ := f.settings.Get("listen_host")
+	if !ok || v != "127.0.0.1" {
+		t.Errorf("listen_host = %q ok=%v", v, ok)
+	}
+}
+
+func TestSettingsUpdateLockedListenHostRejected(t *testing.T) {
+	f := setupAPI(t)
+	sh := NewSettingsHandler(f.settings, "::", true, "env")
+	admin := &user.User{ID: 1, Role: "admin", Status: "active"}
+	body, _ := json.Marshal(map[string]string{"listen_host": "all"})
+	req := httptest.NewRequest("PUT", "/api/settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, admin))
+	rec := httptest.NewRecorder()
+	sh.Update(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("update code=%d, want 400", rec.Code)
 	}
 }

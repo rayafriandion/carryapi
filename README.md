@@ -48,12 +48,13 @@ GOOS=windows GOARCH=amd64 go build -o carryapi-windows-amd64.exe ./cmd/carryapi
 ./carryapi
 ```
 
-默认监听 `0.0.0.0:8067`(广播开,其他设备可访问)。数据文件 `./carryapi.db`,主密钥 `./carryapi.key`(首次自动生成)。
+默认监听 `[::]:8067`(广播开,Windows/Linux 通常同时接受 IPv4/IPv6)。数据文件 `./carryapi.db`,主密钥 `./carryapi.key`(首次自动生成)。
 
 ### 环境变量
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
+| `CARRYAPI_HOST` | all | 监听地址:`all`=双栈监听 `[::]`(通常含IPv4),`0.0.0.0`=仅IPv4,`::`=IPv6双栈,`127.0.0.1`/`::1`=仅本机 |
 | `CARRYAPI_PORT` | 8067 | 监听端口 |
 | `CARRYAPI_DB_PATH` | ./carryapi.db | 数据库路径 |
 | `CARRYAPI_MASTER_KEY` | (自动生成) | 敏感字段加密主密钥,必须恰好 32 字节 |
@@ -63,7 +64,7 @@ GOOS=windows GOARCH=amd64 go build -o carryapi-windows-amd64.exe ./cmd/carryapi
 
 ### 广播开关
 
-广播开 = 监听 `0.0.0.0`(局域网/公网可访问);广播关 = 监听 `127.0.0.1`(仅本机)。存于数据库 `settings` 表 `listen_host` 键。管理后台「系统设置」页展示当前值(只读),修改监听地址需改配置并重启进程。
+管理后台「系统设置」可切换广播开关并保存到数据库 `settings.listen_host`，重启后生效。默认值 `all` 监听 `[::]`，通常同时支持 IPv4/IPv6；`127.0.0.1` 表示仅本机。也可用 `--host` 或 `CARRYAPI_HOST` 覆盖；设置后后台开关会锁定，例如：`./carryapi --host all --port 8067`。IPv6 访问 URL 需写成 `http://[你的IPv6]:8067/`，并确认 Windows 防火墙、路由器/光猫 IPv6 入站防火墙已放行。
 
 ## 认证
 
@@ -183,7 +184,7 @@ curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8067/v1/models
 | 路由配置 | 按模型管理上游绑定、路由策略、24h健康时间轴与性能指标 | admin |
 | 配额管理 | 设置 token/费用上限(当前仅编辑当前登录用户自身配额) | admin |
 | 用户管理 | 创建/改角色/禁用/删除用户 | admin |
-| 系统设置 | 广播地址(只读展示)、开放注册、强制2FA、日志保留天数 | admin |
+| 系统设置 | 广播开关、监听模式、开放注册、强制2FA、日志保留天数 | admin |
 
 > 说明:`force_2fa` 与 `log_retention_days` 当前仅在后台保存/展示,对应强制逻辑与日志清理任务尚未实现,不产生实际效果。OAuth client id/secret 目前需直接写入数据库 `settings` 表,重启后生效。完整逐页操作说明见 [MANUAL.md](MANUAL.md)。
 

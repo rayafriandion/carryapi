@@ -3,12 +3,14 @@
     <n-card title="广播开关" class="section">
       <div class="setting-row">
         <div class="setting-info">
-          <span class="label">监听地址</span>
-          <span class="desc">监听地址修改需在服务器配置中设置,重启后生效。</span>
+          <span class="label">允许其他设备访问</span>
+          <span class="desc">{{ listenDescription }}</span>
         </div>
-        <n-switch :value="broadcastOn" disabled />
+        <n-switch v-model:value="broadcastOn" :disabled="listenLocked || saving" />
       </div>
-      <div class="listen-value">当前监听地址: <n-tag>{{ listenHost || '-' }}</n-tag></div>
+      <div class="listen-value">当前监听模式: <n-tag>{{ listenModeLabel }}</n-tag></div>
+      <div v-if="listenLocked" class="listen-value">监听地址由{{ listenSourceLabel }}控制，后台无法修改。</div>
+      <div v-else class="listen-value">修改后需要重启 carryAPI 才会生效。</div>
     </n-card>
 
     <n-card title="一般设置" class="section">
@@ -44,23 +46,69 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { NCard, NSwitch, NInputNumber, NButton, NTag, useMessage } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
 
 const message = useMessage()
 const saving = ref(false)
 
-const listenHost = ref('')
-const broadcastOn = ref(false)
+const listenHost = ref('all')
+const listenLocked = ref(false)
+const listenSource = ref('default')
 const form = reactive({ registration_open: false, force_2fa: false, log_retention_days: 30 })
+
+const broadcastOn = computed({
+  get: () => listenHost.value !== '127.0.0.1' && listenHost.value !== '::1',
+  set: (value: boolean) => {
+    listenHost.value = value ? 'all' : '127.0.0.1'
+  },
+})
+
+const listenModeLabel = computed(() => {
+  switch (listenHost.value) {
+    case 'all':
+      return '双栈全部接口 ([::])'
+    case '0.0.0.0':
+      return '仅 IPv4 全部接口'
+    case '::':
+      return 'IPv6 双栈全部接口 ([::])'
+    case '127.0.0.1':
+      return '仅本机 IPv4'
+    case '::1':
+      return '仅本机 IPv6'
+    default:
+      return listenHost.value || '-'
+  }
+})
+
+const listenSourceLabel = computed(() => {
+  switch (listenSource.value) {
+    case 'flag':
+      return '启动参数 --host'
+    case 'env':
+      return '环境变量 CARRYAPI_HOST'
+    case 'database':
+      return '系统设置'
+    default:
+      return '默认配置'
+  }
+})
+
+const listenDescription = computed(() => {
+  if (broadcastOn.value) {
+    return '广播开：本机、局域网和公网均可访问，需放行防火墙和路由器端口。'
+  }
+  return '广播关：仅运行 carryAPI 的这台机器可以访问。'
+})
 
 async function load() {
   try {
     const res = await http.get('/api/settings')
     const s = res.data || {}
-    listenHost.value = s.listen_host || ''
-    broadcastOn.value = listenHost.value === '0.0.0.0'
+    listenHost.value = s.listen_host || 'all'
+    listenLocked.value = s.listen_host_locked === 'true'
+    listenSource.value = s.listen_host_source || 'default'
     form.registration_open = s.registration_open === 'true'
     form.force_2fa = s.force_2fa === 'true'
     const d = parseInt(s.log_retention_days, 10)
@@ -73,12 +121,17 @@ async function load() {
 async function onSave() {
   saving.value = true
   try {
-    await http.put('/api/settings', {
+    const res = await http.put('/api/settings', {
+      listen_host: listenHost.value,
       registration_open: String(form.registration_open),
       force_2fa: String(form.force_2fa),
       log_retention_days: String(form.log_retention_days),
     })
-    message.success('已保存')
+    if (res.data?.restart_required) {
+      message.success('已保存，监听地址需重启 carryAPI 后生效')
+    } else {
+      message.success('已保存')
+    }
   } catch (e) {
     message.error(errorMessage(e))
   } finally {

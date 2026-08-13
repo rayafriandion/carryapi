@@ -3,23 +3,64 @@ package config
 import (
 	"crypto/rand"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
 )
 
 type Config struct {
-	Port      int
-	DBPath    string
-	MasterKey []byte
+	Host           string
+	Port           int
+	DBPath         string
+	MasterKey      []byte
+	ListenHostSet  bool
+	ListenHostFrom string
+}
+
+var validListenHosts = map[string]struct{}{
+	"all":       {},
+	"0.0.0.0":   {},
+	"::":        {},
+	"127.0.0.1": {},
+	"::1":       {},
 }
 
 func Load() (Config, error) {
+	return LoadWithArgs(os.Args[1:])
+}
+
+func LoadWithArgs(args []string) (Config, error) {
 	cfg := Config{
 		Port:   8067,
 		DBPath: "./carryapi.db",
 	}
-	if v := os.Getenv("CARRYAPI_PORT"); v != "" {
+
+	fs := flag.NewFlagSet("carryapi", flag.ContinueOnError)
+	flagHost := fs.String("host", "", "listen host")
+	flagPort := fs.Int("port", 0, "listen port")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if *flagPort != 0 {
+		cfg.Port = *flagPort
+	}
+	if *flagHost != "" {
+		if _, ok := validListenHosts[*flagHost]; !ok {
+			return Config{}, fmt.Errorf("invalid --host %q", *flagHost)
+		}
+		cfg.Host = *flagHost
+		cfg.ListenHostSet = true
+		cfg.ListenHostFrom = "flag"
+	} else if v := os.Getenv("CARRYAPI_HOST"); v != "" {
+		if _, ok := validListenHosts[v]; !ok {
+			return Config{}, fmt.Errorf("invalid CARRYAPI_HOST %q", v)
+		}
+		cfg.Host = v
+		cfg.ListenHostSet = true
+		cfg.ListenHostFrom = "env"
+	}
+	if v := os.Getenv("CARRYAPI_PORT"); v != "" && *flagPort == 0 {
 		p, err := strconv.Atoi(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("invalid CARRYAPI_PORT: %w", err)

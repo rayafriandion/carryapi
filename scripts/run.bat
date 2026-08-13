@@ -1,7 +1,7 @@
 @echo off
 REM carryAPI production mode: build single binary (with embedded frontend) and run
 REM Usage: scripts\run.bat [CARRYAPI_PORT]
-REM Env vars: CARRYAPI_PORT, CARRYAPI_DB_PATH, CARRYAPI_ADMIN_EMAIL, CARRYAPI_ADMIN_PASSWORD, ...
+REM Env vars: CARRYAPI_HOST, CARRYAPI_PORT, CARRYAPI_DB_PATH, CARRYAPI_ADMIN_EMAIL, CARRYAPI_ADMIN_PASSWORD, ...
 cd /d "%~dp0.."
 
 set "BIN=carryapi.exe"
@@ -16,7 +16,7 @@ if errorlevel 1 (
 )
 
 echo ==^> Starting carryAPI (default http://localhost:%CARRYAPI_PORT%)
-echo     On first start the admin password is printed in the console - save it.
+echo     Default listen mode is all interfaces: [::]:%CARRYAPI_PORT% (dual-stack).
 echo     Press Ctrl+C to stop.
 "%BIN%"
 if errorlevel 1 (

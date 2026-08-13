@@ -44,21 +44,54 @@ func TestHealthEndpoint(t *testing.T) {
 func TestBroadcastOffListensLoopback(t *testing.T) {
 	s := newServer(t)
 	s.deps.Store.Set("listen_host", "127.0.0.1")
-	addr, err := s.listenAddr()
+	addrs, err := s.listenAddrs()
 	if err != nil {
-		t.Fatalf("listenAddr: %v", err)
+		t.Fatalf("listenAddrs: %v", err)
 	}
-	if !strings.HasPrefix(addr, "127.0.0.1:") {
-		t.Errorf("addr = %q, want loopback", addr)
+	if len(addrs) != 1 || !strings.HasPrefix(addrs[0], "127.0.0.1:") {
+		t.Errorf("addrs = %#v, want loopback", addrs)
 	}
 }
 
 func TestBroadcastOnListensAllInterfaces(t *testing.T) {
 	s := newServer(t)
+	s.deps.Store.Set("listen_host", "::")
+	addrs, _ := s.listenAddrs()
+	if len(addrs) != 1 || !strings.HasPrefix(addrs[0], "[::]:") {
+		t.Errorf("addrs = %#v, want [::]", addrs)
+	}
+}
+
+func TestDefaultListensDualStack(t *testing.T) {
+	s := newServer(t)
+	addrs, err := s.listenAddrs()
+	if err != nil {
+		t.Fatalf("listenAddrs: %v", err)
+	}
+	want := []string{"[::]:0"}
+	if strings.Join(addrs, ",") != strings.Join(want, ",") {
+		t.Errorf("addrs = %#v, want %#v", addrs, want)
+	}
+}
+
+func TestExplicitIPv4HostStaysIPv4(t *testing.T) {
+	s := newServer(t)
 	s.deps.Store.Set("listen_host", "0.0.0.0")
-	addr, _ := s.listenAddr()
-	if !strings.HasPrefix(addr, "0.0.0.0:") {
-		t.Errorf("addr = %q, want 0.0.0.0", addr)
+	lc := s.listenerConfig()
+	if lc.mode != "0.0.0.0" || len(lc.hosts) != 1 || lc.hosts[0] != "0.0.0.0" {
+		t.Errorf("config = %+v, want explicit IPv4", lc)
+	}
+}
+
+func TestConfigHostLocksDatabaseValue(t *testing.T) {
+	s := newServer(t)
+	s.cfg.Host = "all"
+	s.cfg.ListenHostSet = true
+	s.cfg.ListenHostFrom = "flag"
+	s.deps.Store.Set("listen_host", "127.0.0.1")
+	lc := s.listenerConfig()
+	if !lc.locked || lc.source != "flag" || lc.mode != "all" || len(lc.hosts) != 1 || lc.hosts[0] != "::" {
+		t.Errorf("listener config = %+v, want locked all/[::]", lc)
 	}
 }
 
@@ -91,6 +124,17 @@ func TestGatewayInfoBroadcast(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleGatewayInfo(rec, req)
 	if rec.Body.String() != `{"base_url":"http://example.com:8067/v1"}`+"\n" {
+		t.Errorf("body=%q", rec.Body.String())
+	}
+}
+
+func TestGatewayInfoIPv6Host(t *testing.T) {
+	s := newServer(t)
+	req := httptest.NewRequest("GET", "/api/gateway/info", nil)
+	req.Host = "[2001:db8::1]:8067"
+	rec := httptest.NewRecorder()
+	s.handleGatewayInfo(rec, req)
+	if rec.Body.String() != `{"base_url":"http://[2001:db8::1]:8067/v1"}`+"\n" {
 		t.Errorf("body=%q", rec.Body.String())
 	}
 }

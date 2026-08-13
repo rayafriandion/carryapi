@@ -51,7 +51,7 @@ func main() {
 	setupH := api.NewSetupHandler(us)
 	keysH := api.NewKeyHandler(ks)
 	quotasH := api.NewQuotaHandler(us)
-	settingsH := api.NewSettingsHandler(st)
+	settingsH := api.NewSettingsHandler(st, cfg.Host, cfg.ListenHostSet, cfg.ListenHostFrom)
 	oauthH := api.NewOAuthHandler(us, ss, st)
 
 	// catalog(上游 provider/模型/价格 管理)

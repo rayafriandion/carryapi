@@ -123,6 +123,36 @@ CREATE TABLE IF NOT EXISTS sessions (
 ALTER TABLE request_logs ALTER COLUMN user_id DROP NOT NULL;
 ALTER TABLE request_logs ALTER COLUMN api_key_id DROP NOT NULL;
 `},
+	{3, `
+CREATE TABLE IF NOT EXISTS model_bindings (
+    id              INTEGER PRIMARY KEY,
+    model_id        INTEGER NOT NULL REFERENCES custom_models(id) ON DELETE CASCADE,
+    provider_id     INTEGER NOT NULL REFERENCES upstream_providers(id),
+    upstream_model  TEXT NOT NULL,
+    priority        INTEGER NOT NULL DEFAULT 100,
+    weight          INTEGER NOT NULL DEFAULT 1,
+    enabled         BOOLEAN NOT NULL DEFAULT 1,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(model_id, provider_id, upstream_model)
+);
+CREATE INDEX IF NOT EXISTS idx_model_bindings_model ON model_bindings(model_id, enabled, priority);
+CREATE INDEX IF NOT EXISTS idx_model_bindings_provider ON model_bindings(provider_id);
+
+INSERT INTO model_bindings(model_id, provider_id, upstream_model, priority, weight, enabled)
+SELECT id, provider_id, upstream_model, 100, 1, enabled
+FROM custom_models
+WHERE NOT EXISTS (
+    SELECT 1 FROM model_bindings mb WHERE mb.model_id = custom_models.id
+);
+
+ALTER TABLE custom_models ADD COLUMN routing_strategy TEXT NOT NULL DEFAULT 'auto';
+ALTER TABLE custom_models ADD COLUMN auto_mode TEXT NOT NULL DEFAULT 'priority';
+`},
+	{4, `
+ALTER TABLE request_logs ADD COLUMN ttft_ms INTEGER;
+CREATE INDEX IF NOT EXISTS idx_request_logs_provider_model
+    ON request_logs(provider_id, upstream_model, created_at);
+`},
 }
 
 func Migrate(d *sql.DB) error {

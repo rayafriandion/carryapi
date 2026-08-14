@@ -37,6 +37,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { NCard, NGrid, NGridItem, NInput, NButton, NDataTable } from 'naive-ui'
 import { http } from '../api/http'
+import { formatMoney, loadCurrency } from '../utils/currency'
 
 const filters = reactive({
   model: '', error_type: '', request_id: '', status: '', start: '', end: '',
@@ -46,6 +47,8 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+const systemCurrency = ref('USD')
+const costRender = (row: any) => formatMoney(row.Cost, systemCurrency.value)
 
 const pagination = reactive({
   page: 1,
@@ -61,11 +64,12 @@ const columns = [
   { title: '用户', key: 'Email' },
   { title: '模型', key: 'CustomModel' },
   { title: '上游模型', key: 'UpstreamModel' },
+  { title: '上游Key', key: 'ProviderAPIKeyID', render: (row: any) => (row.ProviderKeyLabel ? row.ProviderKeyLabel : row.ProviderAPIKeyID ? '#' + row.ProviderAPIKeyID : '—') },
   { title: '协议入', key: 'ProtocolIn' },
   { title: '协议出', key: 'ProtocolOut' },
   { title: '输入 Token', key: 'InputTokens' },
   { title: '输出 Token', key: 'OutputTokens' },
-  { title: '费用', key: 'Cost' },
+  { title: '费用', key: 'Cost', render: costRender },
   { title: '耗时(ms)', key: 'DurationMs' },
   { title: '状态码', key: 'StatusCode' },
   { title: '错误类型', key: 'ErrorType' },
@@ -104,7 +108,10 @@ function reset() {
   load(1)
 }
 
-onMounted(() => load(1))
+onMounted(() => {
+  loadCurrency().then((c) => { systemCurrency.value = c })
+  load(1)
+})
 </script>
 
 <style scoped>

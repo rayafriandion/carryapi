@@ -53,11 +53,20 @@ func TestPriceNoPrice(t *testing.T) {
 	}
 }
 
-func TestPriceInvalidCurrency(t *testing.T) {
+func TestPriceCustomAndInvalidCurrency(t *testing.T) {
 	f := newCatalogFixture(t)
 	p, _ := f.providers.Create("OpenAI", "https://api.openai.com/v1", "k", "openai_chat")
 	m, _ := f.models.Create("m1", p.ID, "gpt-4o")
-	if _, err := f.prices.Set(m.ID, 1.0, 1.0, nil, nil, "EUR"); err == nil {
-		t.Errorf("expected error for invalid currency")
+	// 预设之外的自定义币种应可用
+	if _, err := f.prices.Set(m.ID, 1.0, 1.0, nil, nil, "CZK"); err != nil {
+		t.Fatalf("set custom currency: %v", err)
+	}
+	cur, _ := f.prices.GetCurrent(m.ID)
+	if cur.Currency != "CZK" {
+		t.Errorf("currency = %q, want CZK", cur.Currency)
+	}
+	// 非法币种应报错(超过 8 位)
+	if _, err := f.prices.Set(m.ID, 1.0, 1.0, nil, nil, "ZZZZZZZZZ"); err == nil {
+		t.Error("expected error for invalid currency")
 	}
 }

@@ -44,13 +44,14 @@ func (p *Proxy) resolveModel(name string) (*resolvedModel, error) {
 	}, nil
 }
 
-func (p *Proxy) checkQuota(u *user.User, keyID int64) error {
+func (p *Proxy) checkQuota(u *user.User, keyID, modelID int64) error {
 	scopes := []struct {
 		scope   string
 		scopeID int64
 	}{
 		{"user", u.ID},
 		{"key", keyID},
+		{"model", modelID},
 	}
 	for _, s := range scopes {
 		quotas, err := p.deps.Users.GetQuotas(s.scope, s.scopeID)

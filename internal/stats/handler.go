@@ -207,6 +207,11 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	}
 	f.ErrorType = r.URL.Query().Get("error_type")
 	f.RequestID = r.URL.Query().Get("request_id")
+	if v := r.URL.Query().Get("provider_key_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			f.ProviderKeyID = &id
+		}
+	}
 	if v := r.URL.Query().Get("page"); v != "" {
 		f.Page, _ = strconv.Atoi(v)
 	}

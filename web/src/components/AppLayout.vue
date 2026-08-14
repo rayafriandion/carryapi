@@ -50,6 +50,7 @@ const adminMenus: MenuOption[] = [
       { label: '路由配置', key: 'routing' },
       { label: '配额管理', key: 'quotas' },
       { label: '用户管理', key: 'users' },
+      { label: '定价设置', key: 'settings-pricing' },
     ],
   },
   { label: '系统设置', key: 'settings' },

@@ -18,7 +18,7 @@
         <n-card class="section" title="概览">
           <n-descriptions :column="3" label-placement="left" bordered size="small">
             <n-descriptions-item label="模型名称">{{ model.name }}</n-descriptions-item>
-            <n-descriptions-item label="币种">{{ model.currency === 'CNY' ? '人民币 (￥)' : '美元 ($)' }}</n-descriptions-item>
+            <n-descriptions-item label="币种">{{ currencyLabel(model.currency) }}</n-descriptions-item>
             <n-descriptions-item label="路由策略">{{ routingStrategyLabel }}</n-descriptions-item>
             <n-descriptions-item label="输入价格">{{ formatPrice(model.input_price, model.currency) }}</n-descriptions-item>
             <n-descriptions-item label="输出价格">{{ formatPrice(model.output_price, model.currency) }}</n-descriptions-item>
@@ -85,6 +85,7 @@ import {
   NDataTable, NGrid, NGi, useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+import { currencyLabel, formatPricePerM } from '../utils/currency'
 import { useAuthStore } from '../stores/auth'
 
 interface BindingDetail {
@@ -141,9 +142,7 @@ const routingStrategyLabel = computed(() => {
 })
 
 function formatPrice(v: number | null, currency: string): string {
-  if (v === null || v === undefined) return '—'
-  const sym = currency === 'CNY' ? '￥' : '$'
-  return `${sym}${v.toFixed(4)} / M tokens`
+  return formatPricePerM(v, currency)
 }
 function formatPercent(v: number): string {
   if (!v) return '0%'

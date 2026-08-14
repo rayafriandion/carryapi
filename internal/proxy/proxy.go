@@ -68,6 +68,10 @@ type requestContext struct {
 	selected       *catalog.SelectedBinding
 	candidates     []catalog.ModelBinding
 	price          *catalog.Price
+	// 上游 key 池选择结果(用于 request_logs 与失败降级)
+	providerKeyID   int64
+	providerKey     string
+	providerKeyLabel string
 	// 统计
 	inputTokens   int
 	outputTokens  int

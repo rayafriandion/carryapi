@@ -4,9 +4,11 @@
 
 > 📖 **完整使用手册见 [MANUAL.md](MANUAL.md)**(安装、构建、启动、配置、API、运维、FAQ)。以下为快速开始。
 
+> 🏷️ 当前版本 **v0.2.0-beta**：新增供应商多上游 API Key 池（用户亲和选 Key + 失败自动降级/冷却/删除 + API Key 调用日志）、统一币种定价、模型配额。更新日志见 [MANUAL.md#15-更新日志](MANUAL.md)。
+
 ## 状态
 
-✅ 全部功能已完成:单二进制部署(前端内嵌)、认证(密码/2FA/Passkey/OAuth)、API Key、配额、多协议代理、用量/费用/成功率统计、请求日志、管理后台(含从供应商批量导入模型、供应商连通性测试、仪表板展示 API base_url)。
+✅ 全部功能已完成:单二进制部署(前端内嵌)、认证(密码/2FA/Passkey/OAuth)、API Key、配额、多协议代理、用量/费用/成功率统计、请求日志、管理后台(含从供应商批量导入模型、供应商连通性测试、供应商多 API Key 池与 API Key 调用日志、仪表板展示 API base_url)。
 
 ## 快速开始
 
@@ -144,7 +146,7 @@ curl http://localhost:8067/v1/chat/completions \
 curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8067/v1/models
 ```
 
-上游供应商、模型与定价由管理员通过管理 API 配置:`/api/providers`、`/api/models`、`/api/models/{id}/price`。上游协议(openai_chat / openai_responses / anthropic)与客户端使用的下游协议可任意组合,由代理自动转换。
+上游供应商、模型与定价由管理员通过管理 API 配置:`/api/providers`、`/api/models`、`/api/models/{id}/price`。模型价格的币种由「定价设置」统一指定(默认 USD),所有价格/费用按该币种统一显示。上游协议(openai_chat / openai_responses / anthropic)与客户端使用的下游协议可任意组合,由代理自动转换。
 
 ## 统计 API
 
@@ -178,11 +180,12 @@ curl -H "Authorization: Bearer carry-xxxx..." http://localhost:8067/v1/models
 | 模型列表/详情 | 只读浏览启用模型、价格、上游绑定、30天统计与健康时间轴 | 登录 |
 | 统计分析 | 汇总(按模型/上游/Key)、时间趋势、费用核算(CSV导出)、成功率(失败下钻、CSV导出) | 登录 |
 | 请求日志 | 分页 + 筛选(model/状态/错误类型/RequestId/时间) | 登录 |
-| API Key | 创建(明文仅显示一次)、复制、编辑标签/禁用/删除 | 登录 |
+| API Key | 创建(明文仅显示一次)、复制、编辑标签/禁用/删除、设置配额 | 登录 |
 | 账号设置 | 基本信息、TOTP 开关(含备份码) | 登录 |
-| 模型管理 | 上游供应商(可测试连通性)、自定义模型(可从供应商批量导入)、定价 | admin |
+| 模型管理 | 上游供应商(可测试连通性、多 API Key 池管理与调用日志)、自定义模型(可从供应商批量导入)、定价、配额/限额 | admin |
 | 路由配置 | 按模型管理上游绑定、路由策略、24h健康时间轴与性能指标 | admin |
-| 配额管理 | 设置 token/费用上限(当前仅编辑当前登录用户自身配额) | admin |
+| 配额管理 | 设置 token/费用上限(用户范围,当前仅编辑当前登录用户自身配额);Key 配额在「API Key」页、模型配额在「模型管理」中配置 | admin |
+| 定价设置 | 设置系统统一币种(常用法定货币预设 + 自定义代码),所有价格/费用统一显示 | admin |
 | 用户管理 | 创建/改角色/禁用/删除用户 | admin |
 | 系统设置 | 广播开关、监听模式、开放注册、强制2FA、日志保留天数 | admin |
 

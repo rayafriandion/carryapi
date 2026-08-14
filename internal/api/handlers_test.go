@@ -392,3 +392,81 @@ func TestSettingsUpdateLockedListenHostRejected(t *testing.T) {
 		t.Fatalf("update code=%d, want 400", rec.Code)
 	}
 }
+
+func TestKeyQuotaHandler(t *testing.T) {
+	f := setupAPI(t)
+	kh := NewKeyHandler(f.keys)
+	kh.SetUsers(f.users)
+	realU, _ := f.users.Create("keyquota@x.com", "dummyhash", "user")
+	u := &user.User{ID: realU.ID, Role: "user", Status: "active"}
+
+	// 创建带配额
+	var lim int64 = 1_000_000
+	var cost float64 = 10.0
+	body, _ := json.Marshal(map[string]any{
+		"label": "prod",
+		"quota": map[string]any{"period": "month", "limit_tokens": lim, "limit_cost": cost},
+	})
+	req := httptest.NewRequest("POST", "/api/keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, u))
+	rec := httptest.NewRecorder()
+	kh.Create(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("create code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &created)
+	kid := int64(created["id"].(float64))
+
+	// 列表应包含配额
+	req = httptest.NewRequest("GET", "/api/keys", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, u))
+	rec = httptest.NewRecorder()
+	kh.List(rec, req)
+	var list []map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list) != 1 {
+		t.Fatalf("list len=%d", len(list))
+	}
+	qm, ok := list[0]["quota"].(map[string]any)
+	if !ok {
+		t.Fatalf("quota missing in list: %+v", list[0])
+	}
+	if qm["limit_tokens"] != float64(lim) || qm["limit_cost"] != cost {
+		t.Errorf("quota = %+v", qm)
+	}
+
+	// 编辑更新配额(upsert)
+	var newLim int64 = 500_000
+	ubody, _ := json.Marshal(map[string]any{
+		"label": "prod", "status": "active",
+		"quota": map[string]any{"period": "total", "limit_tokens": newLim, "limit_cost": nil},
+	})
+	req = httptest.NewRequest("PUT", "/api/keys/"+strconv.FormatInt(kid, 10), bytes.NewReader(ubody))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, u))
+	req = withChiParam(req, "id", strconv.FormatInt(kid, 10))
+	rec = httptest.NewRecorder()
+	kh.Update(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("update code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	qs, _ := f.users.GetQuotas("key", kid)
+	if len(qs) != 1 || *qs[0].LimitTokens != newLim || qs[0].LimitCost != nil {
+		t.Fatalf("updated quota = %+v", qs)
+	}
+
+	// 删除 Key -> 配额一并清理
+	req = httptest.NewRequest("DELETE", "/api/keys/"+strconv.FormatInt(kid, 10), nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserKey{}, u))
+	req = withChiParam(req, "id", strconv.FormatInt(kid, 10))
+	rec = httptest.NewRecorder()
+	kh.Delete(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("delete code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if qs, _ := f.users.GetQuotas("key", kid); len(qs) != 0 {
+		t.Fatalf("expected quota deleted with key, got %+v", qs)
+	}
+}

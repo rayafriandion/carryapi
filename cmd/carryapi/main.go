@@ -50,6 +50,7 @@ func main() {
 	usersH := api.NewUserHandler(us, ss)
 	setupH := api.NewSetupHandler(us)
 	keysH := api.NewKeyHandler(ks)
+	keysH.SetUsers(us) // API Key 配额随创建/编辑/删除持久化
 	quotasH := api.NewQuotaHandler(us)
 	settingsH := api.NewSettingsHandler(st, cfg.Host, cfg.ListenHostSet, cfg.ListenHostFrom)
 	oauthH := api.NewOAuthHandler(us, ss, st)
@@ -61,7 +62,11 @@ func main() {
 	catPrice := catalog.NewPriceStore(d)
 	routingStats := catalog.NewRoutingStats(d)
 	catalogH := catalog.NewHandler(d, catProv, catModel, catPrice, routingStats)
+	catalogH.SetUsers(us)    // 模型配额随创建/编辑/删除持久化
+	catalogH.SetSettings(st) // 系统统一币种(定价设置)
 	healthCache := catalog.NewHealthCache(catBindings, catProv, routingStats)
+	// 上游 key 冷却期结束后的后台自测(重试 3 次,失败删除)
+	keyRetryWorker := catalog.NewKeyRetryWorker(catProv, nil)
 
 	// WebAuthn (passkey) Relying Party config. Defaults target local dev
 	// (localhost:8067); override via env for production deployments.
@@ -115,6 +120,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	go healthCache.Start(ctx)
+	go keyRetryWorker.Start(ctx)
 	go func() {
 		<-stop
 		fmt.Println("\nshutting down...")

@@ -8,11 +8,18 @@
     </n-card>
 
     <!-- 新建 -->
-    <n-modal v-model:show="createShow" preset="card" title="新建 API Key" style="width: 420px">
+    <n-modal v-model:show="createShow" preset="card" title="新建 API Key" style="width: 460px">
       <n-form>
         <n-form-item label="标签">
           <n-input v-model:value="createForm.label" placeholder="例如:生产环境" @keydown.enter="onCreate" />
         </n-form-item>
+        <n-form-item label="Token 上限">
+          <n-input-number v-model:value="createForm.limit_tokens" :min="0" :step="1000" placeholder="留空表示不限制" clearable style="width: 100%" />
+        </n-form-item>
+        <n-form-item label="费用上限">
+          <n-input-number v-model:value="createForm.limit_cost" :min="0" :step="1" placeholder="留空表示不限制" clearable style="width: 100%" />
+        </n-form-item>
+        <p class="hint">达到上限后使用该 Key 的请求返回 429。留空表示不限制。</p>
       </n-form>
       <template #footer>
         <div class="modal-footer">
@@ -37,7 +44,7 @@
     </n-modal>
 
     <!-- 编辑 -->
-    <n-modal v-model:show="editShow" preset="card" title="编辑 API Key" style="width: 420px">
+    <n-modal v-model:show="editShow" preset="card" title="编辑 API Key" style="width: 460px">
       <n-form>
         <n-form-item label="标签">
           <n-input v-model:value="editForm.label" @keydown.enter="onEdit" />
@@ -45,6 +52,13 @@
         <n-form-item label="状态">
           <n-select v-model:value="editForm.status" :options="statusOptions" />
         </n-form-item>
+        <n-form-item label="Token 上限">
+          <n-input-number v-model:value="editForm.limit_tokens" :min="0" :step="1000" placeholder="留空表示不限制" clearable style="width: 100%" />
+        </n-form-item>
+        <n-form-item label="费用上限">
+          <n-input-number v-model:value="editForm.limit_cost" :min="0" :step="1" placeholder="留空表示不限制" clearable style="width: 100%" />
+        </n-form-item>
+        <p class="hint">两个字段均留空表示移除配额。</p>
       </n-form>
       <template #footer>
         <div class="modal-footer">
@@ -58,12 +72,14 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref, h } from 'vue'
-import { NButton, NCard, NDataTable, NForm, NFormItem, NInput, NModal, NSelect, NAlert, NPopconfirm, useMessage } from 'naive-ui'
+import { NButton, NCard, NDataTable, NForm, NFormItem, NInput, NInputNumber, NModal, NSelect, NAlert, NPopconfirm, useMessage } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+import { formatMoney, loadCurrency } from '../utils/currency'
 
 const message = useMessage()
 const rows = ref<any[]>([])
 const loading = ref(false)
+const systemCurrency = ref('USD')
 
 const statusOptions = [
   { label: '启用', value: 'active' },
@@ -74,6 +90,21 @@ const columns = [
   { title: 'Key 前缀', key: 'key_prefix' },
   { title: '标签', key: 'label' },
   { title: '状态', key: 'status' },
+  {
+    title: '配额',
+    key: 'quota',
+    render(row: any) {
+      const q = row.quota
+      if (!q || !q.id) return '—'
+      const parts: string[] = []
+      if (q.limit_tokens != null) parts.push('Token ' + q.limit_tokens)
+      if (q.limit_cost != null) parts.push('费用 ' + formatMoney(q.limit_cost, systemCurrency.value))
+      if (q.used_tokens > 0 || q.used_cost > 0) {
+        parts.push('已用 ' + q.used_tokens + ' / ' + formatMoney(q.used_cost, systemCurrency.value))
+      }
+      return parts.length ? parts.join(' · ') : '—'
+    },
+  },
   { title: '创建时间', key: 'created_at' },
   { title: '最后使用', key: 'last_used_at' },
   {
@@ -106,7 +137,7 @@ async function load() {
 // ---- create ----
 const createShow = ref(false)
 const creating = ref(false)
-const createForm = reactive({ label: '' })
+const createForm = reactive({ label: '', limit_tokens: null as number | null, limit_cost: null as number | null })
 const plainShow = ref(false)
 const plainKey = ref('')
 
@@ -122,7 +153,14 @@ async function onCreate() {
   }
   creating.value = true
   try {
-    const res = await http.post('/api/keys', { label: createForm.label })
+    const res = await http.post('/api/keys', {
+      label: createForm.label,
+      quota: {
+        period: 'total',
+        limit_tokens: createForm.limit_tokens ?? null,
+        limit_cost: createForm.limit_cost ?? null,
+      },
+    })
     createShow.value = false
     plainKey.value = res.data.key || ''
     plainShow.value = true
@@ -143,19 +181,22 @@ function copyPlain() {
 // ---- edit ----
 const editShow = ref(false)
 const editing = ref(false)
-const editForm = reactive({ id: 0, label: '', status: 'active' })
+const editForm = reactive({ id: 0, label: '', status: 'active', limit_tokens: null as number | null, limit_cost: null as number | null })
 
 function openEdit(row: any) {
   editForm.id = row.id
   editForm.label = row.label
   editForm.status = row.status || 'active'
+  const q = row.quota
+  editForm.limit_tokens = q && q.id ? (q.limit_tokens ?? null) : null
+  editForm.limit_cost = q && q.id ? (q.limit_cost ?? null) : null
   editShow.value = true
 }
 
 async function onEdit() {
   editing.value = true
   try {
-    await http.put(`/api/keys/${editForm.id}`, { label: editForm.label, status: editForm.status })
+    await http.put(`/api/keys/${editForm.id}`, { label: editForm.label, status: editForm.status, quota: { period: 'total', limit_tokens: editForm.limit_tokens ?? null, limit_cost: editForm.limit_cost ?? null } })
     editShow.value = false
     message.success('已保存')
     load()
@@ -177,12 +218,20 @@ async function onDelete(row: any) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  loadCurrency().then((c) => { systemCurrency.value = c })
+  load()
+})
 </script>
 
 <style scoped>
 .toolbar {
   margin-bottom: 16px;
+}
+.hint {
+  color: #999;
+  font-size: 12px;
+  margin: 0 0 12px;
 }
 .modal-footer {
   display: flex;

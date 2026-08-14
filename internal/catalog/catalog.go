@@ -35,13 +35,13 @@ type catalogModel struct {
 
 type catalogBindingDetail struct {
 	catalogBinding
-	ProviderStatus  string   `json:"provider_status"`
-	TotalRequests24h int     `json:"total_requests_24h"`
-	SuccessRate24h  float64  `json:"success_rate_24h"`
-	AvgLatencyMs    int64    `json:"avg_latency_ms"`
-	AvgTtftMs       int64    `json:"avg_ttft_ms"`
-	Timeline        []string `json:"timeline"`
-	LastRequestAt   *string  `json:"last_request_at"`
+	ProviderStatus   string   `json:"provider_status"`
+	TotalRequests24h int      `json:"total_requests_24h"`
+	SuccessRate24h   float64  `json:"success_rate_24h"`
+	AvgLatencyMs     int64    `json:"avg_latency_ms"`
+	AvgTtftMs        int64    `json:"avg_ttft_ms"`
+	Timeline         []string `json:"timeline"`
+	LastRequestAt    *string  `json:"last_request_at"`
 }
 
 type catalogModelDetail struct {
@@ -125,7 +125,7 @@ func (h *Handler) ListCatalog(w http.ResponseWriter, r *http.Request) {
 			cm.InputPrice = &in
 			cm.OutputPrice = &outPrice
 			cm.CacheReadPrice = price.CacheReadPrice
-			cm.Currency = price.Currency
+			cm.Currency = h.currency()
 			if cm.Currency == "" {
 				cm.Currency = "USD"
 			}
@@ -191,7 +191,7 @@ func (h *Handler) GetCatalogModel(w http.ResponseWriter, r *http.Request) {
 		detail.OutputPrice = &outPrice
 		detail.CacheReadPrice = price.CacheReadPrice
 		detail.CacheWritePrice = price.CacheWritePrice
-		detail.Currency = price.Currency
+		detail.Currency = h.currency()
 		if detail.Currency == "" {
 			detail.Currency = "USD"
 		}

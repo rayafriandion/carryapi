@@ -45,6 +45,12 @@ func (s *ProviderStore) Create(name, baseURL, apiKey, protocol string) (Provider
 		return Provider{}, fmt.Errorf("create provider: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	// 同时把该 key 落入多 key 池(便于后续追加更多 key)。
+	if apiKey != "" {
+		if _, err := s.AddKey(id, apiKey, ""); err != nil {
+			return Provider{}, fmt.Errorf("seed provider api key pool: %w", err)
+		}
+	}
 	return s.Get(id)
 }
 
@@ -89,12 +95,41 @@ func (s *ProviderStore) Update(id int64, name, baseURL, apiKey, protocol, status
 		_, err = s.db.Exec(
 			`UPDATE upstream_providers SET name=?, base_url=?, api_key=?, protocol=?, status=? WHERE id=?`,
 			name, baseURL, enc, protocol, status, id)
+		// 同步池中主 key(第一个 active key)为新值;若池为空则新增。
+		if err == nil {
+			if err = s.replacePrimaryKey(id, apiKey); err != nil {
+				return err
+			}
+		}
 	} else {
 		_, err = s.db.Exec(
 			`UPDATE upstream_providers SET name=?, base_url=?, protocol=?, status=? WHERE id=?`,
 			name, baseURL, protocol, status, id)
 	}
 	return err
+}
+
+// replacePrimaryKey 把池中第一个 active key 更新为新值;若无 active key 则新增一条。
+func (s *ProviderStore) replacePrimaryKey(providerID int64, apiKey string) error {
+	var keyID int64
+	err := s.db.QueryRow(
+		`SELECT id FROM provider_api_keys WHERE provider_id = ? AND status = 'active' ORDER BY priority ASC, id ASC LIMIT 1`,
+		providerID).Scan(&keyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.AddKey(providerID, apiKey, "")
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	enc, err := s.cipher.Encrypt([]byte(apiKey))
+	if err != nil {
+		return fmt.Errorf("encrypt provider api key: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE provider_api_keys SET key_enc = ? WHERE id = ?`, enc, keyID); err != nil {
+		return fmt.Errorf("update primary provider api key: %w", err)
+	}
+	return s.logKeyEvent(keyID, providerID, KeyEventUpdated, "primary key replaced via provider edit")
 }
 
 func (s *ProviderStore) Delete(id int64) error {

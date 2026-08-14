@@ -72,6 +72,47 @@
         <n-button type="primary" :loading="importing" :disabled="!importSelected.length" @click="onImport">导入 ({{ importSelected.length }})</n-button>
       </template>
     </n-modal>
+
+    <!-- 供应商多 API Key 管理 -->
+    <n-modal v-model:show="keyShow" preset="card" :title="keyProvider ? `管理 API Key - ${keyProvider.name}` : '管理 API Key'" style="width: 760px">
+      <n-form inline>
+        <n-form-item label="API Key">
+          <n-input v-model:value="keyForm.api_key" type="password" show-password-on="click" placeholder="sk-..." style="width: 320px" />
+        </n-form-item>
+        <n-form-item label="标签">
+          <n-input v-model:value="keyForm.label" placeholder="可选,如:team-a" style="width: 160px" />
+        </n-form-item>
+        <n-form-item>
+          <n-button type="primary" :loading="keySaving" @click="onAddKey">添加</n-button>
+        </n-form-item>
+      </n-form>
+      <n-alert v-if="keyHint" type="info" :show-icon="false" class="key-hint">{{ keyHint }}</n-alert>
+      <n-data-table :columns="keyColumns" :data="keys" :loading="keysLoading" :pagination="false" :bordered="false" size="small" />
+    </n-modal>
+
+    <!-- API Key 调用日志 -->
+    <n-modal v-model:show="keyLogShow" preset="card" title="API Key 调用日志" style="width: 820px">
+      <n-spin :show="keyLogLoading">
+        <n-descriptions v-if="keyLogData.key" :column="3" size="small" bordered class="key-log-desc">
+          <n-descriptions-item label="掩码">{{ keyLogData.key.masked }}</n-descriptions-item>
+          <n-descriptions-item label="标签">{{ keyLogData.key.label || '—' }}</n-descriptions-item>
+          <n-descriptions-item label="状态">
+            <n-tag size="small" :type="keyStatusType(keyLogData.key.status)">{{ keyStatusText(keyLogData.key.status) }}</n-tag>
+          </n-descriptions-item>
+          <n-descriptions-item label="优先级">{{ keyLogData.key.priority }}</n-descriptions-item>
+          <n-descriptions-item label="失败次数">{{ keyLogData.key.fail_count }}</n-descriptions-item>
+          <n-descriptions-item label="创建时间">{{ fmtTime(keyLogData.key.created_at) }}</n-descriptions-item>
+        </n-descriptions>
+        <n-tabs type="line" animated class="key-log-tabs">
+          <n-tab-pane name="events" tab="生命周期事件">
+            <n-data-table :columns="eventColumns" :data="keyLogData.events || []" :pagination="false" :bordered="false" size="small" :max-height="340" />
+          </n-tab-pane>
+          <n-tab-pane name="requests" tab="调用记录">
+            <n-data-table :columns="reqColumns" :data="keyLogData.requests || []" :pagination="false" :bordered="false" size="small" :max-height="340" />
+          </n-tab-pane>
+        </n-tabs>
+      </n-spin>
+    </n-modal>
   </div>
 </template>
 
@@ -81,13 +122,16 @@ import { useRouter } from 'vue-router'
 import type { DataTableColumns } from 'naive-ui'
 import {
   NButton, NCard, NDataTable, NTabs, NTabPane, NForm, NFormItem, NInput,
-  NModal, NSelect, NEmpty,
-  NSwitch, NPopconfirm, NCheckboxGroup, NCheckbox, NSpace, NTag, useMessage,
+  NModal, NSelect, NEmpty, NAlert, NSpin,
+  NSwitch, NPopconfirm, NCheckboxGroup, NCheckbox, NSpace, NTag,
+  NDescriptions, NDescriptionsItem, useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+import { formatMoney, loadCurrency } from '../utils/currency'
 
 const message = useMessage()
 const router = useRouter()
+const systemCurrency = ref('USD')
 
 const protocolOptions = [
   { label: 'OpenAI Chat', value: 'openai_chat' },
@@ -109,6 +153,16 @@ const providerColumns = [
   { title: '协议', key: 'protocol' },
   { title: '状态', key: 'status' },
   {
+    title: 'API Key',
+    key: 'keys',
+    render(row: any) {
+      const parts = [`${row.key_count || 0} 个`]
+      if ((row.active_key_count || 0) > 0) parts.push(`可用 ${row.active_key_count}`)
+      if ((row.cooling_key_count || 0) > 0) parts.push(`冷却 ${row.cooling_key_count}`)
+      return h('span', parts.join(' · '))
+    },
+  },
+  {
     title: '测试',
     key: 'test',
     render(row: any) {
@@ -121,6 +175,7 @@ const providerColumns = [
     render(row: any) {
       return h('div', { class: 'row-actions' }, [
         h(NButton, { size: 'small', loading: row._testing, onClick: () => onProviderTest(row) }, { default: () => '测试' }),
+        h(NButton, { size: 'small', onClick: () => openKeyManage(row) }, { default: () => 'Keys' }),
         h(NButton, { size: 'small', onClick: () => openProviderEdit(row) }, { default: () => '编辑' }),
         h(NPopconfirm, { onPositiveClick: () => onProviderDelete(row) }, {
           trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
@@ -227,6 +282,176 @@ async function onProviderTest(row: any) {
   }
 }
 
+// ---- provider api keys(多 key 池) ----
+const keyShow = ref(false)
+const keysLoading = ref(false)
+const keySaving = ref(false)
+const keyProvider = ref<any>(null)
+const keys = ref<any[]>([])
+const keyForm = reactive({ api_key: '', label: '' })
+const keyHint = ref('')
+
+async function openKeyManage(row: any) {
+  keyProvider.value = row
+  keyForm.api_key = ''
+  keyForm.label = ''
+  keyShow.value = true
+  await loadKeys(row.id)
+}
+async function loadKeys(providerId: number) {
+  keysLoading.value = true
+  try {
+    const res = await http.get(`/api/providers/${providerId}/keys`)
+    keys.value = res.data?.keys || []
+  } catch (e) {
+    message.error(errorMessage(e))
+  } finally {
+    keysLoading.value = false
+  }
+}
+async function onAddKey() {
+  if (!keyProvider.value) return
+  if (!keyForm.api_key.trim()) {
+    message.warning('请填写 API Key')
+    return
+  }
+  keySaving.value = true
+  try {
+    await http.post(`/api/providers/${keyProvider.value.id}/keys`, {
+      api_key: keyForm.api_key.trim(),
+      label: keyForm.label.trim(),
+    })
+    message.success('已添加')
+    keyForm.api_key = ''
+    keyForm.label = ''
+    keyHint.value = '新 key 已追加到池尾;同一用户的请求会优先使用其用过的 key,以提高缓存命中率。'
+    loadKeys(keyProvider.value.id)
+    loadProviders()
+  } catch (e) {
+    message.error(errorMessage(e))
+  } finally {
+    keySaving.value = false
+  }
+}
+async function onDeleteKey(row: any) {
+  if (!keyProvider.value) return
+  try {
+    await http.delete(`/api/providers/${keyProvider.value.id}/keys/${row.id}`)
+    message.success('已删除')
+    loadKeys(keyProvider.value.id)
+    loadProviders()
+  } catch (e) {
+    message.error(errorMessage(e))
+  }
+}
+
+function keyStatusText(s: string) {
+  return { active: '启用', cooling_down: '冷却中', deleted: '已删除' }[s] || s
+}
+function keyStatusType(s: string) {
+  if (s === 'active') return 'success'
+  if (s === 'cooling_down') return 'warning'
+  return 'default'
+}
+
+const keyColumns = [
+  { title: '掩码', key: 'masked' },
+  { title: '标签', key: 'label' },
+  {
+    title: '状态',
+    key: 'status',
+    render(row: any) {
+      return h(NTag, { size: 'small', type: keyStatusType(row.status) }, { default: () => keyStatusText(row.status) })
+    },
+  },
+  { title: '优先级', key: 'priority' },
+  { title: '失败次数', key: 'fail_count' },
+  {
+    title: '下次重试',
+    key: 'retry_after',
+    render(row: any) {
+      return row.retry_after ? fmtTime(row.retry_after) : '—'
+    },
+  },
+  {
+    title: '最后使用',
+    key: 'last_used_at',
+    render(row: any) {
+      return row.last_used_at ? fmtTime(row.last_used_at) : '—'
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    render(row: any) {
+      return h('div', { class: 'row-actions' }, [
+        h(NButton, { size: 'small', onClick: () => openKeyLog(row) }, { default: () => '日志' }),
+        h(NPopconfirm, { onPositiveClick: () => onDeleteKey(row) }, {
+          trigger: () => h(NButton, { size: 'small', type: 'error', disabled: row.status === 'deleted' }, { default: () => '删除' }),
+          default: () => '确定删除该上游 Key?',
+        }),
+      ])
+    },
+  },
+]
+
+// ---- api key 调用日志 ----
+const keyLogShow = ref(false)
+const keyLogLoading = ref(false)
+const keyLogData = ref<any>({ key: null, events: [], requests: [] })
+
+async function openKeyLog(row: any) {
+  if (!keyProvider.value) return
+  keyLogData.value = { key: null, events: [], requests: [] }
+  keyLogShow.value = true
+  keyLogLoading.value = true
+  try {
+    const res = await http.get(`/api/providers/${keyProvider.value.id}/keys/${row.id}/logs`)
+    keyLogData.value = res.data || { key: null, events: [], requests: [] }
+  } catch (e) {
+    message.error(errorMessage(e))
+  } finally {
+    keyLogLoading.value = false
+  }
+}
+
+const eventColumns = [
+  { title: '时间', key: 'created_at', render(row: any) { return fmtTime(row.created_at) } },
+  { title: '事件', key: 'event', render(row: any) { return eventText(row.event) } },
+  { title: '详情', key: 'detail' },
+]
+const reqColumns = [
+  { title: '时间', key: 'created_at', render(row: any) { return fmtTime(row.created_at) } },
+  { title: '用户', key: 'email' },
+  { title: '模型', key: 'custom_model' },
+  { title: '上游模型', key: 'upstream_model' },
+  { title: '状态码', key: 'status_code' },
+  { title: '错误', key: 'error_type' },
+  { title: '错误信息', key: 'error_message' },
+]
+
+function eventText(e: string) {
+  const map: Record<string, string> = {
+    created: '创建',
+    updated: '更新',
+    degraded: '降级(移到优先级末尾并冷却 1h)',
+    retry_started: '后台重试开始',
+    retry_success: '后台重试成功',
+    retry_failed: '后台重试失败',
+    recovered: '恢复可用',
+    deleted: '已删除(重试仍失败)',
+    deleted_manual: '已删除(手动)',
+  }
+  return map[e] || e
+}
+
+function fmtTime(v: any) {
+  if (!v) return '—'
+  const d = new Date(v)
+  if (isNaN(d.getTime())) return String(v)
+  return d.toLocaleString()
+}
+
 // ---- models ----
 const models = ref<any[]>([])
 const modelsLoading = ref(false)
@@ -238,6 +463,21 @@ const modelColumns: DataTableColumns<any> = [
     key: 'enabled',
     render(row: any) {
       return h(NSwitch, { value: row.enabled, onUpdateValue: (v: boolean) => onToggleModel(row, v) })
+    },
+  },
+  {
+    title: '配额',
+    key: 'quota',
+    render(row: any) {
+      const q = row.quota
+      if (!q || !q.id) return '—'
+      const parts: string[] = []
+      if (q.limit_tokens != null) parts.push('Token ' + q.limit_tokens)
+      if (q.limit_cost != null) parts.push('费用 ' + formatMoney(q.limit_cost, systemCurrency.value))
+      if (q.used_tokens > 0 || q.used_cost > 0) {
+        parts.push('已用 ' + q.used_tokens + ' / ' + formatMoney(q.used_cost, systemCurrency.value))
+      }
+      return parts.length ? parts.join(' · ') : '—'
     },
   },
   {
@@ -345,6 +585,7 @@ async function onImport() {
 
 onMounted(async () => {
   await Promise.all([loadProviders(), loadModels()])
+  loadCurrency().then((c) => { systemCurrency.value = c })
 })
 </script>
 
@@ -369,5 +610,14 @@ onMounted(async () => {
 }
 .bad {
   color: #d03050;
+}
+.key-hint {
+  margin-bottom: 12px;
+}
+.key-log-desc {
+  margin-bottom: 12px;
+}
+.key-log-tabs {
+  margin-top: 8px;
 }
 </style>

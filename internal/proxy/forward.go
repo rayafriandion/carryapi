@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,7 +27,7 @@ func providerPath(protocol string) string {
 	return "/"
 }
 
-func (p *Proxy) buildUpstreamRequest(r *http.Request, provider *catalog.Provider, payload []byte) (*http.Request, error) {
+func (p *Proxy) buildUpstreamRequest(r *http.Request, provider *catalog.Provider, apiKey string, payload []byte) (*http.Request, error) {
 	url := provider.BaseURL + providerPath(provider.Protocol)
 	req, err := http.NewRequestWithContext(r.Context(), "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -34,10 +35,10 @@ func (p *Proxy) buildUpstreamRequest(r *http.Request, provider *catalog.Provider
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if provider.Protocol == "anthropic" {
-		req.Header.Set("x-api-key", provider.APIKey)
+		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 	} else {
-		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	return req, nil
 }
@@ -80,7 +81,7 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request, downstream s
 	rc.candidates = resolved.candidates
 	rc.price = resolved.price
 
-	if err := p.checkQuota(u, ak.ID); err != nil {
+	if err := p.checkQuota(u, ak.ID, rc.model.ID); err != nil {
 		p.writeError(w, rc, asIRError(err))
 		return
 	}
@@ -90,22 +91,93 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request, downstream s
 	}
 }
 
+// keyRetryLimit 单次请求中对同一上游 key 的瞬时失败重试次数(需求:重试 3 次)。
+const keyRetryLimit = 3
+
+func keyRetryBackoff(attempt int) time.Duration {
+	return time.Duration(attempt) * 300 * time.Millisecond
+}
+
 func (p *Proxy) forwardSelected(w http.ResponseWriter, r *http.Request, rc *requestContext, irReq *ir.Request, downstream string, selected catalog.SelectedBinding, candidates []catalog.ModelBinding) error {
 	provider := selected.Provider
+
+	// 1. 从该供应商的多 key 池中选择上游 key:优先该用户之前用过的 key(保证缓存命中率),
+	//    其余按优先级/ID 排序。
+	key, err := p.deps.Providers.SelectKey(provider.ID, rc.user.ID)
+	if err != nil {
+		return p.failoverOrError(r, w, rc, irReq, downstream, selected, candidates,
+			ir.NewError("upstream", "provider_unavailable", "no available upstream api key for provider", 502))
+	}
+	rc.providerKeyID = key.ID
+	rc.providerKey = key.APIKey
+	rc.providerKeyLabel = key.Label
+
 	irReq.Model = selected.UpstreamModel
 	upstreamPayload, err := encodeUpstreamRequest(provider.Protocol, irReq)
 	if err != nil {
 		return ir.NewError("internal", "encode_failed", "failed to encode upstream request", 500)
 	}
-	upReq, err := p.buildUpstreamRequest(r, &provider, upstreamPayload)
-	if err != nil {
-		return ir.NewError("internal", "upstream_build_failed", "failed to build upstream request", 500)
+
+	// 2. 用该 key 发起请求;按需求处理失败:
+	//    - 404/429/402/401/403 或"余额不足/欠费"等明确信号 -> 立即降级,不重试;
+	//    - 其他瞬时失败(网络错误/5xx) -> 重试 keyRetryLimit(3) 次,仍失败则降级。
+	var (
+		upResp   *http.Response
+		lastErr  *ir.Error
+		degraded bool
+	)
+	attempts := 0
+	for {
+		attempts++
+		upReq, err := p.buildUpstreamRequest(r, &provider, key.APIKey, upstreamPayload)
+		if err != nil {
+			lastErr = ir.NewError("internal", "upstream_build_failed", "failed to build upstream request", 500)
+			if attempts <= keyRetryLimit {
+				time.Sleep(keyRetryBackoff(attempts))
+				continue
+			}
+			break
+		}
+		upResp, err = p.deps.Client.Do(upReq)
+		if err != nil {
+			lastErr = ir.NewError("upstream", "upstream_unreachable", "upstream request failed: "+err.Error(), 502)
+			if attempts <= keyRetryLimit {
+				time.Sleep(keyRetryBackoff(attempts))
+				continue
+			}
+			break
+		}
+		if upResp.StatusCode >= 400 {
+			body, _ := io.ReadAll(upResp.Body)
+			upResp.Body.Close()
+			msg := upstreamErrorMessage(provider.Protocol, body)
+			lastErr = upstreamErrorFromStatus(upResp.StatusCode, msg)
+			if isKeyUnavailable(upResp.StatusCode, msg) {
+				p.degradeProviderKey(key, fmt.Sprintf("http %d: %s", upResp.StatusCode, msg))
+				degraded = true
+				break
+			}
+			if attempts <= keyRetryLimit {
+				time.Sleep(keyRetryBackoff(attempts))
+				continue
+			}
+			break
+		}
+		break // 成功
 	}
-	upResp, err := p.deps.Client.Do(upReq)
-	if err != nil {
-		return p.failoverOrError(r, w, rc, irReq, downstream, selected, candidates,
-			ir.NewError("upstream", "upstream_unreachable", "upstream request failed: "+err.Error(), 502))
+
+	// 3. 记录用户-上游 key 亲和(缓存命中)与 key 最后使用时间。
+	_ = p.deps.Providers.MarkUsed(key.ID, rc.user.ID)
+
+	// 重试 3 次后仍失败(瞬时错误):按需求把该 key 降级到优先级末尾并进入冷却。
+	if !degraded && lastErr != nil && attempts > keyRetryLimit {
+		p.degradeProviderKey(key, "retried 3 times, still failing: "+lastErr.Message)
 	}
+
+	if lastErr != nil {
+		return p.failoverOrError(r, w, rc, irReq, downstream, selected, candidates, lastErr)
+	}
+
 	defer upResp.Body.Close()
 	rc.firstByteAt = time.Now()
 	rc.stream = irReq.Stream
@@ -123,6 +195,41 @@ func (p *Proxy) forwardSelected(w http.ResponseWriter, r *http.Request, rc *requ
 	}
 	p.forwardNonStreaming(w, rc, upResp, downstream)
 	return nil
+}
+
+// degradeProviderKey 把上游 key 降级到优先级末尾并进入 1 小时冷却(失败不阻断请求)。
+func (p *Proxy) degradeProviderKey(key catalog.ProviderAPIKey, reason string) {
+	if err := p.deps.Providers.DegradeKey(key.ID, reason); err != nil {
+		// 记录失败即可,下次请求仍会尝试该 key。
+	}
+}
+
+// isKeyUnavailable 判断某上游响应是否表明"该 API key 不可用":
+// 404/429/402/401/403,或错误消息命中"余额不足/欠费"等关键字。
+func isKeyUnavailable(status int, msg string) bool {
+	switch status {
+	case 401, 402, 403, 404, 429:
+		return true
+	}
+	return keyUnavailableMessage(msg)
+}
+
+func keyUnavailableMessage(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, k := range keyUnavailableKeywords {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// keyUnavailableKeywords 余额不足/欠费等上游常见提示(OpenAI/Anthropic/DeepSeek 等)。
+var keyUnavailableKeywords = []string{
+	"insufficient balance", "insufficient_quota", "billing", "arrears",
+	"credit balance", "balance is too low", "account balance", "payment required",
+	"payment_required", "no enough balance", "overdue", "quota exhausted",
+	"欠费", "余额不足",
 }
 
 func (p *Proxy) failoverOrError(r *http.Request, w http.ResponseWriter, rc *requestContext, irReq *ir.Request, downstream string, selected catalog.SelectedBinding, candidates []catalog.ModelBinding, fallback *ir.Error) error {

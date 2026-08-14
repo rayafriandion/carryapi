@@ -24,7 +24,7 @@
         <n-card><n-statistic label="Token 输入/输出" :value="`${summary?.TotalInputTok ?? 0} / ${summary?.TotalOutputTok ?? 0}`" /></n-card>
       </n-grid-item>
       <n-grid-item span="6 s:3 m:2">
-        <n-card><n-statistic label="费用" :value="(summary?.TotalCost ?? 0).toFixed(4)" /></n-card>
+        <n-card><n-statistic label="费用" :value="currencySymbol(systemCurrency) + (summary?.TotalCost ?? 0).toFixed(4)" /></n-card>
       </n-grid-item>
       <n-grid-item span="6 s:3 m:2">
         <n-card><n-statistic label="平均耗时 (ms)" :value="(summary?.AvgDurationMs ?? 0).toFixed(2)" /></n-card>
@@ -47,8 +47,10 @@ import * as echarts from 'echarts'
 import { NGrid, NGridItem, NCard, NStatistic, NDataTable, NText, NButton, useMessage } from 'naive-ui'
 
 const message = useMessage()
+const systemCurrency = ref('USD')
 
 import { http, errorMessage } from '../api/http'
+import { currencySymbol, loadCurrency } from '../utils/currency'
 
 const summary = ref<any>(null)
 const logs = ref<any[]>([])
@@ -116,6 +118,7 @@ onMounted(async () => {
     summary.value = s.data
     renderChart(t.data || [])
     logs.value = l.data.items || []
+    loadCurrency().then((c) => { systemCurrency.value = c })
   } catch (e) {
     message.error(errorMessage(e))
   }

@@ -45,12 +45,16 @@ func (p *Proxy) recordStats(rc *requestContext) {
 	if rc.errorMessage != "" {
 		errorMessage = rc.errorMessage
 	}
+	var providerKeyID any
+	if rc.providerKeyID != 0 {
+		providerKeyID = rc.providerKeyID
+	}
 	_, _ = p.deps.DB.Exec(
-		`INSERT INTO request_logs(request_id, user_id, api_key_id, custom_model, provider_id, upstream_model,
+		`INSERT INTO request_logs(request_id, user_id, api_key_id, provider_api_key_id, custom_model, provider_id, upstream_model,
 		 protocol_in, protocol_out, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 		 cost, duration_ms, status_code, error_type, error_message, stream, ttft_ms)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rc.requestID, userID, apiKeyID, modelName, providerID, upstreamModel,
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rc.requestID, userID, apiKeyID, providerKeyID, modelName, providerID, upstreamModel,
 		rc.downstream, protocolOutName(rc.provider), rc.inputTokens, rc.outputTokens,
 		rc.cacheRead, rc.cacheCreation, cost, durationMs, rc.statusCode, errorType, errorMessage, rc.stream, ttftMs)
 
@@ -58,6 +62,9 @@ func (p *Proxy) recordStats(rc *requestContext) {
 	if rc.user != nil && rc.statusCode == 200 && rc.errorType == "" {
 		p.deps.Users.IncrementUsage("user", rc.user.ID, int64(rc.inputTokens+rc.outputTokens), cost)
 		p.deps.Users.IncrementUsage("key", rc.apiKeyID, int64(rc.inputTokens+rc.outputTokens), cost)
+		if rc.model != nil {
+			p.deps.Users.IncrementUsage("model", rc.model.ID, int64(rc.inputTokens+rc.outputTokens), cost)
+		}
 	}
 }
 

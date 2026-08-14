@@ -36,10 +36,12 @@
 import { onMounted, reactive, ref, h } from 'vue'
 import { NAlert, NButton, NCard, NDataTable, NForm, NFormItem, NInput, NInputNumber, NModal, NPopconfirm, useMessage } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+import { formatMoney, loadCurrency } from '../utils/currency'
 
 const message = useMessage()
 const rows = ref<any[]>([])
 const loading = ref(false)
+const systemCurrency = ref('USD')
 
 const columns = [
   { title: 'ID', key: 'ID' },
@@ -57,11 +59,17 @@ const columns = [
     title: '费用上限',
     key: 'LimitCost',
     render(row: any) {
-      return row.LimitCost ?? '-'
+      return row.LimitCost == null ? '-' : formatMoney(row.LimitCost, systemCurrency.value)
     },
   },
   { title: '已用 Token', key: 'UsedTokens' },
-  { title: '已用费用', key: 'UsedCost' },
+  {
+    title: '已用费用',
+    key: 'UsedCost',
+    render(row: any) {
+      return row.UsedCost == null || row.UsedCost === 0 ? '-' : formatMoney(row.UsedCost, systemCurrency.value)
+    },
+  },
   {
     title: '操作',
     key: 'actions',
@@ -113,7 +121,10 @@ async function onSave() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  loadCurrency().then((c) => { systemCurrency.value = c })
+  load()
+})
 </script>
 
 <style scoped>

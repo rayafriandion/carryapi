@@ -25,26 +25,9 @@
           <div class="model-head">
             <n-text strong>{{ m.name }}</n-text>
             <n-space :size="6" align="center">
-              <n-tag size="small" :bordered="false" type="info">{{ m.currency === 'CNY' ? '￥ CNY' : '$ USD' }}</n-tag>
+              <n-tag size="small" :bordered="false" type="info">{{ currencyLabel(m.currency) }}</n-tag>
               <n-tag size="small" :type="successTagType(m.success_rate)">{{ formatPercent(m.success_rate) }}</n-tag>
             </n-space>
-          </div>
-          <div class="bindings">
-            <div class="bindings-title">
-              上游绑定 <n-tag size="tiny" :bordered="false">{{ (m.bindings || []).length }}</n-tag>
-            </div>
-            <div class="binding-tags">
-              <n-tag
-                v-for="(b, i) in (m.bindings || [])"
-                :key="i"
-                size="small"
-                :bordered="false"
-                :type="b.enabled ? 'default' : 'warning'"
-              >
-                {{ b.provider_name }} / {{ b.upstream_model }}
-              </n-tag>
-              <span v-if="!(m.bindings || []).length" class="muted">—</span>
-            </div>
           </div>
           <div class="price-grid">
             <div><span class="label">输入</span><span class="value">{{ formatPrice(m.input_price, m.currency) }}</span></div>
@@ -81,16 +64,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
-
-interface CatalogBinding {
-  provider_id: number
-  provider_name: string
-  protocol: string
-  upstream_model: string
-  priority: number
-  weight: number
-  enabled: boolean
-}
+import { currencyLabel, formatPricePerM } from '../utils/currency'
 
 interface CatalogModel {
   id: number
@@ -98,7 +72,6 @@ interface CatalogModel {
   upstream_model: string
   provider_name: string
   protocol: string
-  bindings: CatalogBinding[]
   input_price: number | null
   output_price: number | null
   cache_read_price: number | null
@@ -116,9 +89,7 @@ const loading = ref(false)
 const viewMode = ref<'card' | 'table'>('card')
 
 function formatPrice(v: number | null, currency: string): string {
-  if (v === null || v === undefined) return '—'
-  const sym = currency === 'CNY' ? '￥' : '$'
-  return `${sym}${v.toFixed(4)} / M tokens`
+  return formatPricePerM(v, currency)
 }
 function formatPercent(v: number): string {
   if (!v) return '0%'
@@ -139,24 +110,12 @@ function openDetail(id: number) {
   router.push({ name: 'model-catalog-detail', params: { id } })
 }
 
-function renderBindingTags(row: CatalogModel) {
-  const bindings = row.bindings || []
-  if (!bindings.length) return '—'
-  return h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' },
-    bindings.map((b) => h(NTag, {
-      size: 'small',
-      bordered: false,
-      type: b.enabled ? 'default' : 'warning',
-    }, { default: () => b.enabled ? `${b.provider_name} / ${b.upstream_model}` : `${b.provider_name} / ${b.upstream_model} (停用)` })))
-}
-
 const columns = [
   { title: '模型名称', key: 'name' },
-  { title: '上游绑定', key: 'bindings', render: renderBindingTags },
   {
     title: '币种',
     key: 'currency',
-    render: (r: CatalogModel) => (r.currency === 'CNY' ? '￥ CNY' : '$ USD'),
+    render: (r: CatalogModel) => currencyLabel(r.currency),
   },
   {
     title: '输入价格',
@@ -234,27 +193,6 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-.bindings {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.bindings-title {
-  color: #666;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.binding-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.muted {
-  color: #bbb;
-  font-size: 12px;
 }
 .price-grid {
   display: grid;

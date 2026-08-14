@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"carryapi/internal/crypto"
 	"carryapi/internal/middleware"
+	"carryapi/internal/settings"
 	"carryapi/internal/user"
 	"github.com/go-chi/chi/v5"
 )
@@ -363,5 +365,155 @@ func TestGetBindingMetrics(t *testing.T) {
 	}
 	if resp.AvgTtftMs != 50 {
 		t.Errorf("avg ttft: expected 50, got %d", resp.AvgTtftMs)
+	}
+}
+
+func TestPricingEndpoint(t *testing.T) {
+	f := newCatalogFixture(t)
+	st := settings.New(f.db)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
+	h.SetSettings(st)
+
+	// 先建一个模型价格(USD)
+	prov, _ := f.providers.Create("OpenAI", "https://api.openai.com/v1", "k", "openai_chat")
+	m, _ := f.models.Create("m1", prov.ID, "gpt-4o")
+	if _, err := f.prices.Set(m.ID, 1.0, 1.0, nil, nil, "USD"); err != nil {
+		t.Fatalf("set price: %v", err)
+	}
+
+	// GET -> 默认 USD + 预设列表
+	rec := httptest.NewRecorder()
+	h.GetPricing(rec, httptest.NewRequest("GET", "/api/settings/pricing", nil))
+	if rec.Code != 200 {
+		t.Fatalf("get pricing code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["currency"] != "USD" {
+		t.Errorf("currency = %v, want USD", resp["currency"])
+	}
+	if presets, ok := resp["presets"].([]any); !ok || len(presets) < 5 {
+		t.Errorf("presets missing: %+v", resp["presets"])
+	}
+
+	// PUT -> 切换为 EUR(小写自动归一化)
+	body, _ := json.Marshal(map[string]string{"currency": "eur"})
+	rec = httptest.NewRecorder()
+	h.UpdatePricing(rec, httptest.NewRequest("PUT", "/api/settings/pricing", bytes.NewReader(body)))
+	if rec.Code != 200 {
+		t.Fatalf("update pricing code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := h.currency(); got != "EUR" {
+		t.Errorf("system currency = %q, want EUR", got)
+	}
+	// 已有模型价格应被迁移为新币种
+	pc, err := f.prices.GetCurrent(m.ID)
+	if err != nil || pc.Currency != "EUR" {
+		t.Errorf("migrated currency = %q err=%v, want EUR", pc.Currency, err)
+	}
+
+	// 非法币种 -> 400
+	bad, _ := json.Marshal(map[string]string{"currency": "123"})
+	rec = httptest.NewRecorder()
+	h.UpdatePricing(rec, httptest.NewRequest("PUT", "/api/settings/pricing", bytes.NewReader(bad)))
+	if rec.Code != 400 {
+		t.Errorf("invalid currency code=%d, want 400", rec.Code)
+	}
+}
+
+func TestModelQuotaHandler(t *testing.T) {
+	f := newCatalogFixture(t)
+	c, _ := crypto.New(bytes.Repeat([]byte{1}, 32))
+	us := user.New(f.db, c)
+	h := NewHandler(f.db, f.providers, f.models, f.prices, nil)
+	h.SetUsers(us)
+	r := chi.NewRouter()
+	r.With(middleware.RequireRole("admin")).Post("/api/models", h.CreateModel)
+	r.With(middleware.RequireRole("admin")).Get("/api/models", h.ListModels)
+	r.With(middleware.RequireRole("admin")).Put("/api/models/{id}", h.UpdateModel)
+	r.With(middleware.RequireRole("admin")).Delete("/api/models/{id}", h.DeleteModel)
+	prov, _ := f.providers.Create("OpenAI", "https://api.openai.com/v1", "sk-1", "openai_chat")
+
+	// 创建模型并携带配额
+	var lim int64 = 1000000
+	var cost float64 = 10.0
+	body, _ := json.Marshal(map[string]any{
+		"name": "my-gpt4", "provider_id": prov.ID, "upstream_model": "gpt-4o",
+		"currency": "USD", "input_price": 2.5, "output_price": 10.0,
+		"quota": map[string]any{"period": "month", "limit_tokens": lim, "limit_cost": cost},
+	})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("POST", "/api/models", bytes.NewReader(body)).WithContext(adminCtx()))
+	if rec.Code != 200 {
+		t.Fatalf("create model code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 列表应包含配额
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/api/models", nil).WithContext(adminCtx()))
+	var list []map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list) != 1 {
+		t.Fatalf("list len=%d", len(list))
+	}
+	qm, ok := list[0]["quota"].(map[string]any)
+	if !ok {
+		t.Fatalf("quota missing in list: %+v", list[0])
+	}
+	if qm["limit_tokens"] != float64(lim) || qm["limit_cost"] != cost || qm["period"] != "month" {
+		t.Errorf("quota = %+v", qm)
+	}
+	mid := int64(list[0]["id"].(float64))
+
+	// 编辑模型更新配额(upsert)
+	var newLim int64 = 500000
+	ubody, _ := json.Marshal(map[string]any{
+		"name": "my-gpt4", "enabled": true, "currency": "USD", "input_price": 2.5, "output_price": 10.0,
+		"quota": map[string]any{"period": "total", "limit_tokens": newLim, "limit_cost": nil},
+	})
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/api/models/"+strconv.FormatInt(mid, 10), bytes.NewReader(ubody)).WithContext(adminCtx()))
+	if rec.Code != 200 {
+		t.Fatalf("update model code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	qs, _ := us.GetQuotas("model", mid)
+	if len(qs) != 1 {
+		t.Fatalf("expected 1 model quota row, got %d", len(qs))
+	}
+	if *qs[0].LimitTokens != newLim || qs[0].LimitCost != nil || qs[0].Period != "total" {
+		t.Errorf("updated quota = %+v", qs[0])
+	}
+
+	// 清空配额(两个 limit 均为 nil) -> 记录删除
+	cbody, _ := json.Marshal(map[string]any{
+		"name": "my-gpt4", "enabled": true, "currency": "USD", "input_price": 2.5, "output_price": 10.0,
+		"quota": map[string]any{"period": "total", "limit_tokens": nil, "limit_cost": nil},
+	})
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/api/models/"+strconv.FormatInt(mid, 10), bytes.NewReader(cbody)).WithContext(adminCtx()))
+	if rec.Code != 200 {
+		t.Fatalf("clear quota code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if qs, _ := us.GetQuotas("model", mid); len(qs) != 0 {
+		t.Fatalf("expected quota cleared, got %+v", qs)
+	}
+
+	// 删除模型 -> 配额一并清理(先重新设置一条再删)
+	rb, _ := json.Marshal(map[string]any{
+		"name": "my-gpt4", "enabled": true, "currency": "USD", "input_price": 2.5, "output_price": 10.0,
+		"quota": map[string]any{"period": "total", "limit_tokens": newLim, "limit_cost": nil},
+	})
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("PUT", "/api/models/"+strconv.FormatInt(mid, 10), bytes.NewReader(rb)).WithContext(adminCtx()))
+	if rec.Code != 200 {
+		t.Fatalf("reset quota code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/models/"+strconv.FormatInt(mid, 10), nil).WithContext(adminCtx()))
+	if rec.Code != 200 {
+		t.Fatalf("delete model code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if qs, _ := us.GetQuotas("model", mid); len(qs) != 0 {
+		t.Fatalf("expected quota deleted with model, got %+v", qs)
 	}
 }

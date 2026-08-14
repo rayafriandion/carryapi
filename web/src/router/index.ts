@@ -23,6 +23,7 @@ const router = createRouter({
       { path: 'quotas', name: 'quotas', component: () => import('../views/QuotasView.vue'), meta: { admin: true } },
       { path: 'users', name: 'users', component: () => import('../views/UsersView.vue'), meta: { admin: true } },
       { path: 'settings', name: 'settings', component: () => import('../views/SettingsView.vue'), meta: { admin: true } },
+      { path: 'settings/pricing', name: 'settings-pricing', component: () => import('../views/SettingsPricingView.vue'), meta: { admin: true } },
     ]},
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

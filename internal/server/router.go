@@ -94,6 +94,8 @@ func (s *Server) buildRouter() http.Handler {
 					// 已登录用户可查看启用模型目录(含价格与全局成功率/延迟)
 					r.Get("/api/catalog", deps.Catalog.ListCatalog)
 					r.Get("/api/catalog/{id}", deps.Catalog.GetCatalogModel)
+					// 系统统一币种只读(展示用);修改仅 admin(见下方)
+					r.Get("/api/settings/pricing", deps.Catalog.GetPricing)
 				}
 			})
 			// admin only
@@ -119,6 +121,12 @@ func (s *Server) buildRouter() http.Handler {
 					r.Delete("/api/providers/{id}", deps.Catalog.DeleteProvider)
 					r.Post("/api/providers/{id}/test", deps.Catalog.TestProvider)
 					r.Post("/api/providers/{id}/models/fetch", deps.Catalog.FetchProviderModels)
+					// 供应商多 API key 池管理与"API key 调用日志"
+					r.Get("/api/providers/{id}/keys", deps.Catalog.ListProviderKeys)
+					r.Post("/api/providers/{id}/keys", deps.Catalog.AddProviderKey)
+					r.Put("/api/providers/{id}/keys/{keyID}", deps.Catalog.UpdateProviderKey)
+					r.Delete("/api/providers/{id}/keys/{keyID}", deps.Catalog.DeleteProviderKey)
+					r.Get("/api/providers/{id}/keys/{keyID}/logs", deps.Catalog.ProviderKeyLogs)
 					r.Get("/api/models", deps.Catalog.ListModels)
 					r.Post("/api/models", deps.Catalog.CreateModel)
 					r.Put("/api/models/{id}", deps.Catalog.UpdateModel)
@@ -131,6 +139,7 @@ func (s *Server) buildRouter() http.Handler {
 					r.Put("/api/models/{id}/routing", deps.Catalog.UpdateModelRouting)
 					r.Get("/api/models/{id}/price", deps.Catalog.GetModelPrice)
 					r.Put("/api/models/{id}/price", deps.Catalog.SetModelPrice)
+					r.Put("/api/settings/pricing", deps.Catalog.UpdatePricing)
 					r.Get("/api/routing/status", deps.Catalog.GetRoutingStatus)
 					r.Get("/api/routing/bindings/{bindingID}/metrics", deps.Catalog.GetBindingMetrics)
 				}

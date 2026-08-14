@@ -10,6 +10,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"carryapi/internal/currency"
+	"carryapi/internal/settings"
+	"carryapi/internal/user"
 )
 
 type Handler struct {
@@ -20,6 +24,8 @@ type Handler struct {
 	prices    *PriceStore
 	prober    *Prober
 	stats     *RoutingStats
+	users     *user.Store     // 可选:配置后模型配额随模型创建/编辑/删除持久化
+	settings  *settings.Store // 可选:配置后系统统一币种用于定价与展示
 }
 
 func NewHandler(db *sql.DB, providers *ProviderStore, models *ModelStore, prices *PriceStore, stats *RoutingStats) *Handler {
@@ -35,6 +41,62 @@ func NewHandler(db *sql.DB, providers *ProviderStore, models *ModelStore, prices
 }
 
 func (h *Handler) SetProber(p *Prober) { h.prober = p }
+
+// SetUsers 注入 user.Store(模型配额 CRUD 用)。不设置时模型配额相关操作被跳过。
+func (h *Handler) SetUsers(u *user.Store) { h.users = u }
+
+// SetSettings 注入 settings.Store(读取系统统一币种)。
+func (h *Handler) SetSettings(s *settings.Store) { h.settings = s }
+
+// currency 返回系统统一币种代码;settings 未配置或读取失败时回退到默认 USD。
+func (h *Handler) currency() string {
+	if h.settings != nil {
+		if c, err := h.settings.Currency(); err == nil && c != "" {
+			return c
+		}
+	}
+	return currency.Default
+}
+
+// modelQuotaReq 模型配额(创建/编辑时可选)。limit_tokens/limit_cost 为 nil 表示该维度不限制。
+type modelQuotaReq struct {
+	Period      string   `json:"period"`
+	LimitTokens *int64   `json:"limit_tokens"`
+	LimitCost   *float64 `json:"limit_cost"`
+}
+
+func (q *modelQuotaReq) validate() error {
+	if q == nil {
+		return nil
+	}
+	if q.Period != "" && q.Period != "total" && q.Period != "month" {
+		return fmt.Errorf("invalid quota period %q", q.Period)
+	}
+	if q.LimitTokens != nil && *q.LimitTokens < 0 {
+		return fmt.Errorf("limit_tokens must be non-negative")
+	}
+	if q.LimitCost != nil && *q.LimitCost < 0 {
+		return fmt.Errorf("limit_cost must be non-negative")
+	}
+	return nil
+}
+
+// applyModelQuota 持久化模型配额(users store 未配置或请求未携带 quota 时跳过)。
+func (h *Handler) applyModelQuota(modelID int64, q *modelQuotaReq) error {
+	if h.users == nil || q == nil {
+		return nil
+	}
+	_, err := h.users.SetModelQuota(modelID, q.Period, q.LimitTokens, q.LimitCost)
+	return err
+}
+
+func (h *Handler) quotaMap(q user.Quota) map[string]any {
+	return map[string]any{
+		"id": q.ID, "scope": q.Scope, "scope_id": q.ScopeID, "period": q.Period,
+		"limit_tokens": q.LimitTokens, "limit_cost": q.LimitCost,
+		"used_tokens": q.UsedTokens, "used_cost": q.UsedCost,
+	}
+}
 
 func jsonOut(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -66,9 +128,22 @@ func (h *Handler) ListProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(providers))
 	for _, p := range providers {
+		keyCount, activeCount, coolingCount := 0, 0, 0
+		if keys, kErr := h.providers.Keys(p.ID); kErr == nil {
+			keyCount = len(keys)
+			for _, k := range keys {
+				switch k.Status {
+				case KeyStatusActive:
+					activeCount++
+				case KeyStatusCoolingDown:
+					coolingCount++
+				}
+			}
+		}
 		out = append(out, map[string]any{
 			"id": p.ID, "name": p.Name, "base_url": p.BaseURL, "protocol": p.Protocol,
 			"status": p.Status, "created_at": p.CreatedAt,
+			"key_count": keyCount, "active_key_count": activeCount, "cooling_key_count": coolingCount,
 		})
 	}
 	jsonOut(w, 200, out)
@@ -205,6 +280,190 @@ func (h *Handler) TestProvider(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{"ok": true, "latency_ms": latency.Milliseconds()})
 }
 
+// ---- provider api keys(多 key 池)----
+
+// ListProviderKeys 返回某供应商的全部上游 key(掩码展示,不暴露明文)。
+func (h *Handler) ListProviderKeys(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	if _, err := h.providers.Get(id); err != nil {
+		jsonErr(w, 404, "provider not found")
+		return
+	}
+	keys, err := h.providers.Keys(id)
+	if err != nil {
+		jsonErr(w, 500, "failed to list provider api keys")
+		return
+	}
+	out := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, h.providerKeyMap(k))
+	}
+	jsonOut(w, 200, map[string]any{"provider_id": id, "keys": out})
+}
+
+func (h *Handler) providerKeyMap(k ProviderAPIKey) map[string]any {
+	m := map[string]any{
+		"id": k.ID, "provider_id": k.ProviderID, "label": k.Label,
+		"masked": MaskKey(k.APIKey), "priority": k.Priority, "base_priority": k.BasePriority,
+		"status": k.Status, "fail_count": k.FailCount,
+		"created_at": k.CreatedAt,
+	}
+	if k.RetryAfter != nil {
+		m["retry_after"] = k.RetryAfter
+	}
+	if k.LastUsedAt != nil {
+		m["last_used_at"] = k.LastUsedAt
+	}
+	if k.DeletedAt != nil {
+		m["deleted_at"] = k.DeletedAt
+	}
+	return m
+}
+
+// AddProviderKey 为供应商新增一个上游 key。
+func (h *Handler) AddProviderKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		APIKey string `json:"api_key"`
+		Label  string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, 400, "invalid body")
+		return
+	}
+	if _, err := h.providers.Get(id); err != nil {
+		jsonErr(w, 404, "provider not found")
+		return
+	}
+	k, err := h.providers.AddKey(id, req.APIKey, req.Label)
+	if err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	jsonOut(w, 200, h.providerKeyMap(k))
+}
+
+// UpdateProviderKey 更新 key 的标签/基准优先级。
+func (h *Handler) UpdateProviderKey(w http.ResponseWriter, r *http.Request) {
+	pid, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	keyID, err := strconv.ParseInt(chi.URLParam(r, "keyID"), 10, 64)
+	if err != nil {
+		jsonErr(w, 400, "invalid key id")
+		return
+	}
+	k, err := h.providers.GetKey(keyID)
+	if err != nil || k.ProviderID != pid {
+		jsonErr(w, 404, "provider api key not found")
+		return
+	}
+	var req struct {
+		Label    string `json:"label"`
+		Priority *int   `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, 400, "invalid body")
+		return
+	}
+	if err := h.providers.UpdateKeyMeta(keyID, req.Label, req.Priority); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	jsonOut(w, 200, map[string]string{"status": "ok"})
+}
+
+// DeleteProviderKey 手动删除某上游 key(软删除,保留日志)。
+func (h *Handler) DeleteProviderKey(w http.ResponseWriter, r *http.Request) {
+	pid, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	keyID, err := strconv.ParseInt(chi.URLParam(r, "keyID"), 10, 64)
+	if err != nil {
+		jsonErr(w, 400, "invalid key id")
+		return
+	}
+	k, err := h.providers.GetKey(keyID)
+	if err != nil || k.ProviderID != pid {
+		jsonErr(w, 404, "provider api key not found")
+		return
+	}
+	if err := h.providers.DeleteKey(keyID, true, "deleted manually by admin"); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	jsonOut(w, 200, map[string]string{"status": "ok"})
+}
+
+// ProviderKeyLogs 返回某上游 key 的"API key 调用日志":
+// 生命周期事件(创建/降级/冷却/重试/恢复/删除) + 近期使用该 key 的请求日志。
+func (h *Handler) ProviderKeyLogs(w http.ResponseWriter, r *http.Request) {
+	pid, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+	keyID, err := strconv.ParseInt(chi.URLParam(r, "keyID"), 10, 64)
+	if err != nil {
+		jsonErr(w, 400, "invalid key id")
+		return
+	}
+	k, err := h.providers.GetKey(keyID)
+	if err != nil || k.ProviderID != pid {
+		jsonErr(w, 404, "provider api key not found")
+		return
+	}
+	events, err := h.providers.KeyEvents(keyID)
+	if err != nil {
+		jsonErr(w, 500, "failed to load key events")
+		return
+	}
+	requests, err := h.providerKeyRequests(keyID)
+	if err != nil {
+		jsonErr(w, 500, "failed to load key requests")
+		return
+	}
+	jsonOut(w, 200, map[string]any{
+		"key": h.providerKeyMap(k), "events": events, "requests": requests,
+	})
+}
+
+// providerKeyRequests 查询最近使用某上游 key 的请求日志(用于 key 调用日志)。
+func (h *Handler) providerKeyRequests(keyID int64) ([]map[string]any, error) {
+	rows, err := h.db.Query(
+		`SELECT rl.request_id, COALESCE(u.email, ''), COALESCE(rl.custom_model, ''), COALESCE(rl.upstream_model, ''),
+		        COALESCE(rl.status_code, 0), COALESCE(rl.error_type, ''), COALESCE(rl.error_message, ''),
+		        COALESCE(rl.input_tokens, 0), COALESCE(rl.output_tokens, 0), rl.created_at
+		 FROM request_logs rl LEFT JOIN users u ON rl.user_id = u.id
+		 WHERE rl.provider_api_key_id = ? ORDER BY rl.id DESC LIMIT 100`, keyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var reqID, email, model, upstreamModel, errType, errMsg string
+		var status, inTok, outTok int
+		var created time.Time
+		if err := rows.Scan(&reqID, &email, &model, &upstreamModel, &status, &errType, &errMsg, &inTok, &outTok, &created); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"request_id": reqID, "email": email, "custom_model": model, "upstream_model": upstreamModel,
+			"status_code": status, "error_type": errType, "error_message": errMsg,
+			"input_tokens": inTok, "output_tokens": outTok, "created_at": created,
+		})
+	}
+	return out, rows.Err()
+}
+
 // ---- models ----
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
@@ -227,36 +486,39 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 		} else {
 			entry["price"] = nil
 		}
+		if h.users != nil {
+			if q, qErr := h.users.GetModelQuota(m.ID); qErr == nil && q.ID != 0 {
+				entry["quota"] = h.quotaMap(q)
+			} else {
+				entry["quota"] = nil
+			}
+		} else {
+			entry["quota"] = nil
+		}
 		out = append(out, entry)
 	}
 	jsonOut(w, 200, out)
 }
 
 type modelPriceReq struct {
-	Currency        string   `json:"currency"`
+	Currency        string   `json:"currency"` // 已弃用:币种由系统统一设置,此处仅保留以兼容旧请求
 	InputPrice      *float64 `json:"input_price"`
 	OutputPrice     *float64 `json:"output_price"`
 	CacheReadPrice  *float64 `json:"cache_read_price"`
 	CacheWritePrice *float64 `json:"cache_write_price"`
 }
 
-func (p modelPriceReq) validate() (input, output float64, cacheRead, cacheWrite *float64, currency string, err error) {
-	if p.Currency == "" {
-		return 0, 0, nil, nil, "", fmt.Errorf("currency is required")
-	}
-	if !validCurrencies[p.Currency] {
-		return 0, 0, nil, nil, "", fmt.Errorf("invalid currency %q", p.Currency)
-	}
+func (p modelPriceReq) validate() (input, output float64, cacheRead, cacheWrite *float64, err error) {
 	if p.InputPrice == nil {
-		return 0, 0, nil, nil, "", fmt.Errorf("input_price is required")
+		return 0, 0, nil, nil, fmt.Errorf("input_price is required")
 	}
 	if p.OutputPrice == nil {
-		return 0, 0, nil, nil, "", fmt.Errorf("output_price is required")
+		return 0, 0, nil, nil, fmt.Errorf("output_price is required")
 	}
 	if *p.InputPrice < 0 || *p.OutputPrice < 0 {
-		return 0, 0, nil, nil, "", fmt.Errorf("price must be non-negative")
+		return 0, 0, nil, nil, fmt.Errorf("price must be non-negative")
 	}
-	return *p.InputPrice, *p.OutputPrice, p.CacheReadPrice, p.CacheWritePrice, p.Currency, nil
+	return *p.InputPrice, *p.OutputPrice, p.CacheReadPrice, p.CacheWritePrice, nil
 }
 
 // priceChanged 判断新价格与当前价格是否不同(决定是否追加历史行)。
@@ -292,13 +554,18 @@ func (h *Handler) CreateModel(w http.ResponseWriter, r *http.Request) {
 			Weight        int    `json:"weight"`
 			Enabled       *bool  `json:"enabled"`
 		} `json:"bindings"`
+		Quota *modelQuotaReq `json:"quota"`
 		modelPriceReq
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, 400, "invalid body")
 		return
 	}
-	input, output, cacheRead, cacheWrite, currency, err := req.modelPriceReq.validate()
+	if err := req.Quota.validate(); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	input, output, cacheRead, cacheWrite, err := req.modelPriceReq.validate()
 	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
@@ -397,12 +664,16 @@ func (h *Handler) CreateModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err := h.prices.SetTx(tx, id, input, output, cacheRead, cacheWrite, currency); err != nil {
+	if _, err := h.prices.SetTx(tx, id, input, output, cacheRead, cacheWrite, h.currency()); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		jsonErr(w, 500, "failed to create model")
+		return
+	}
+	if err := h.applyModelQuota(id, req.Quota); err != nil {
+		jsonErr(w, 500, "failed to save quota: "+err.Error())
 		return
 	}
 	m, _ := h.models.Get(id)
@@ -415,21 +686,26 @@ func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name            string `json:"name"`
-		Enabled         *bool  `json:"enabled"`
-		RoutingStrategy string `json:"routing_strategy"`
-		AutoMode        string `json:"auto_mode"`
+		Name            string         `json:"name"`
+		Enabled         *bool          `json:"enabled"`
+		RoutingStrategy string         `json:"routing_strategy"`
+		AutoMode        string         `json:"auto_mode"`
+		Quota           *modelQuotaReq `json:"quota"`
 		modelPriceReq
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, 400, "invalid body")
 		return
 	}
+	if err := req.Quota.validate(); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
 	if _, err := h.models.Get(id); err != nil {
 		jsonErr(w, 404, "model not found")
 		return
 	}
-	input, output, cacheRead, cacheWrite, currency, err := req.modelPriceReq.validate()
+	input, output, cacheRead, cacheWrite, err := req.modelPriceReq.validate()
 	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
@@ -438,6 +714,9 @@ func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+
+	// 读取当前价格需在事务开启前,否则单连接数据库(:memory: 测试)会因事务占用唯一连接而死锁。
+	current, pErr := h.prices.GetCurrent(id)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -455,15 +734,18 @@ func (h *Handler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	current, pErr := h.prices.GetCurrent(id)
-	if pErr != nil || priceChanged(current, input, output, cacheRead, cacheWrite, currency) {
-		if _, err := h.prices.SetTx(tx, id, input, output, cacheRead, cacheWrite, currency); err != nil {
+	if pErr != nil || priceChanged(current, input, output, cacheRead, cacheWrite, h.currency()) {
+		if _, err := h.prices.SetTx(tx, id, input, output, cacheRead, cacheWrite, h.currency()); err != nil {
 			jsonErr(w, 400, err.Error())
 			return
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		jsonErr(w, 500, "failed to update model")
+		return
+	}
+	if err := h.applyModelQuota(id, req.Quota); err != nil {
+		jsonErr(w, 500, "failed to save quota: "+err.Error())
 		return
 	}
 	jsonOut(w, 200, map[string]string{"status": "ok"})
@@ -477,6 +759,12 @@ func (h *Handler) DeleteModel(w http.ResponseWriter, r *http.Request) {
 	if err := h.models.Delete(id); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
+	}
+	if h.users != nil {
+		if err := h.users.DeleteModelQuota(id); err != nil {
+			jsonErr(w, 500, "failed to delete quota: "+err.Error())
+			return
+		}
 	}
 	jsonOut(w, 200, map[string]string{"status": "ok"})
 }
@@ -656,7 +944,7 @@ func (h *Handler) priceMap(price Price) map[string]any {
 		"output_price":      price.OutputPrice,
 		"cache_read_price":  price.CacheReadPrice,
 		"cache_write_price": price.CacheWritePrice,
-		"currency":          price.Currency,
+		"currency":          h.currency(),
 		"effective_from":    price.EffectiveFrom,
 	}
 }
@@ -694,12 +982,55 @@ func (h *Handler) SetModelPrice(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 400, "invalid body")
 		return
 	}
-	price, err := h.prices.Set(id, req.InputPrice, req.OutputPrice, req.CacheReadPrice, req.CacheWritePrice, req.Currency)
+	price, err := h.prices.Set(id, req.InputPrice, req.OutputPrice, req.CacheReadPrice, req.CacheWritePrice, h.currency())
 	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
 	}
 	jsonOut(w, 200, map[string]any{"id": price.ID, "model_id": id, "currency": price.Currency})
+}
+
+// ---- pricing (系统统一币种设置) ----
+
+// GetPricing 返回系统统一币种与常用货币预设。
+func (h *Handler) GetPricing(w http.ResponseWriter, r *http.Request) {
+	jsonOut(w, 200, map[string]any{
+		"currency": h.currency(),
+		"presets":  currency.Presets,
+	})
+}
+
+// UpdatePricing 设置系统统一币种,并把所有模型价格标注同步为新币种(数值不变)。
+func (h *Handler) UpdatePricing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Currency string `json:"currency"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, 400, "invalid body")
+		return
+	}
+	code := currency.Normalize(req.Currency)
+	if code == "" {
+		jsonErr(w, 400, "currency is required")
+		return
+	}
+	if !currency.Valid(code) {
+		jsonErr(w, 400, "invalid currency code (2-8 位大写字母)")
+		return
+	}
+	if h.settings == nil {
+		jsonErr(w, 500, "settings store not configured")
+		return
+	}
+	if err := h.settings.SetCurrency(code); err != nil {
+		jsonErr(w, 500, "failed to save currency: "+err.Error())
+		return
+	}
+	if _, err := h.db.Exec(`UPDATE model_prices SET currency=?`, code); err != nil {
+		jsonErr(w, 500, "failed to migrate model prices: "+err.Error())
+		return
+	}
+	jsonOut(w, 200, map[string]any{"status": "ok", "currency": code})
 }
 
 // ---- routing ----
@@ -725,7 +1056,7 @@ func (h *Handler) GetRoutingStatus(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	type bindingOut struct {
 		BindingID      int64    `json:"binding_id"`
-		ProviderID    int64    `json:"provider_id"`
+		ProviderID     int64    `json:"provider_id"`
 		ProviderName   string   `json:"provider_name"`
 		ProviderStatus string   `json:"provider_status"`
 		UpstreamModel  string   `json:"upstream_model"`

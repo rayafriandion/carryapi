@@ -16,4 +16,6 @@ web/node_modules/
 
 # Build artifacts
 web/dist/
+dist/
+release/
 *.log

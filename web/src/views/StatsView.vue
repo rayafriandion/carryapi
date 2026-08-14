@@ -63,9 +63,11 @@ import {
   NTabs, NTabPane, NCard, NDataTable, NRadioGroup, NRadioButton, NButton, NModal, useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+import { formatMoney, loadCurrency } from '../utils/currency'
 import { toCSV, downloadCSV } from '../utils/csv'
 
 const message = useMessage()
+const systemCurrency = ref('USD')
 
 const summary = ref<any>(null)
 const costRows = ref<any[]>([])
@@ -74,28 +76,31 @@ const granularity = ref<'day' | 'hour'>('day')
 const trendEl = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 
+const costRender = (row: any) => formatMoney(row.Cost, systemCurrency.value)
+const totalCostRender = (row: any) => formatMoney(row.TotalCost, systemCurrency.value)
+
 const modelColumns = [
   { title: '模型', key: 'Model' },
   { title: '请求', key: 'Requests' },
   { title: '输入 Token', key: 'InputTokens' },
   { title: '输出 Token', key: 'OutputTokens' },
-  { title: '费用', key: 'Cost' },
+  { title: '费用', key: 'Cost', render: costRender },
 ]
 const providerColumns = [
   { title: 'Provider', key: 'ProviderName' },
   { title: '请求', key: 'Requests' },
-  { title: '费用', key: 'Cost' },
+  { title: '费用', key: 'Cost', render: costRender },
 ]
 const keyColumns = [
   { title: 'Key', key: 'KeyPrefix' },
   { title: 'Label', key: 'Label' },
   { title: '请求', key: 'Requests' },
-  { title: '费用', key: 'Cost' },
+  { title: '费用', key: 'Cost', render: costRender },
 ]
 const costColumns = [
   { title: '分组', key: 'Group' },
   { title: '请求', key: 'Requests' },
-  { title: '费用', key: 'TotalCost' },
+  { title: '费用', key: 'TotalCost', render: totalCostRender },
 ]
 const successColumns = [
   { title: '分组', key: 'Group' },
@@ -193,6 +198,7 @@ async function loadTrend() {
 }
 
 onMounted(async () => {
+  loadCurrency().then((c) => { systemCurrency.value = c })
   try {
     const s = await http.get('/api/stats/summary')
     summary.value = s.data

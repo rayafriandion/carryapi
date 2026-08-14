@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"carryapi/internal/currency"
 )
 
 var ErrNoPrice = errors.New("no price configured")
-
-var validCurrencies = map[string]bool{"USD": true, "CNY": true}
 
 type Price struct {
 	ID              int64
@@ -44,16 +44,17 @@ type sqlExecutor interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-func (s *PriceStore) setExec(exe sqlExecutor, modelID int64, inputPrice, outputPrice float64, cacheRead, cacheWrite *float64, currency string) (Price, error) {
-	if currency == "" {
-		currency = "USD"
+func (s *PriceStore) setExec(exe sqlExecutor, modelID int64, inputPrice, outputPrice float64, cacheRead, cacheWrite *float64, code string) (Price, error) {
+	code = currency.Normalize(code)
+	if code == "" {
+		code = currency.Default
 	}
-	if !validCurrencies[currency] {
-		return Price{}, fmt.Errorf("invalid currency %q", currency)
+	if !currency.Valid(code) {
+		return Price{}, fmt.Errorf("invalid currency %q", code)
 	}
 	res, err := exe.Exec(
 		`INSERT INTO model_prices(model_id, input_price, output_price, cache_read_price, cache_write_price, currency) VALUES(?, ?, ?, ?, ?, ?)`,
-		modelID, inputPrice, outputPrice, cacheRead, cacheWrite, currency)
+		modelID, inputPrice, outputPrice, cacheRead, cacheWrite, code)
 	if err != nil {
 		return Price{}, fmt.Errorf("set price: %w", err)
 	}

@@ -55,11 +55,8 @@
       </n-card>
 
       <n-card class="section" title="定价">
-        <p class="hint">按每百万 token 计费。币种、输入/输出价格必填,缓存读/写可选。</p>
+        <p class="hint">按每百万 token 计费。币种由系统统一设置(当前 {{ systemCurrencyLabel }}),输入/输出价格必填,缓存读/写可选。</p>
         <n-form label-placement="left" :label-width="140">
-          <n-form-item label="币种" required>
-            <n-select v-model:value="form.currency" :options="currencyOptions" style="max-width: 240px" />
-          </n-form-item>
           <n-form-item label="输入价格" required>
             <n-input-number v-model:value="form.input_price" :min="0" :step="0.1" placeholder="每百万 token" style="width: 100%" />
           </n-form-item>
@@ -71,6 +68,21 @@
           </n-form-item>
           <n-form-item label="缓存写价格">
             <n-input-number v-model:value="form.cache_write_price" :min="0" :step="0.1" placeholder="可选,每百万 token" clearable style="width: 100%" />
+          </n-form-item>
+        </n-form>
+      </n-card>
+
+      <n-card class="section" title="配额 / 限额">
+        <p class="hint">
+          为对外 API 设置配额上限,达到上限后请求返回 429。留空表示不限制;两个字段均留空表示移除配额。
+          当前按累计总量计算(周期重置暂未启用)。
+        </p>
+        <n-form label-placement="left" :label-width="140">
+          <n-form-item label="Token 上限">
+            <n-input-number v-model:value="form.quota_limit_tokens" :min="0" :step="1000" placeholder="留空表示不限制" clearable style="width: 100%" />
+          </n-form-item>
+          <n-form-item label="费用上限">
+            <n-input-number v-model:value="form.quota_limit_cost" :min="0" :step="1" placeholder="留空表示不限制" clearable style="width: 100%" />
           </n-form-item>
         </n-form>
       </n-card>
@@ -87,18 +99,17 @@ import {
   NSwitch, NSpin, NDataTable, NPopconfirm, useMessage,
 } from 'naive-ui'
 import { http, errorMessage } from '../api/http'
+import { currencyLabel, loadCurrency } from '../utils/currency'
 
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
+const systemCurrency = ref('USD')
+const systemCurrencyLabel = computed(() => currencyLabel(systemCurrency.value))
 
 const isEdit = computed(() => route.name === 'model-edit')
 const modelId = computed(() => Number(route.params.id))
 
-const currencyOptions = [
-  { label: '美元 (USD $)', value: 'USD' },
-  { label: '人民币 (CNY ￥)', value: 'CNY' },
-]
 const routingStrategyOptions = [
   { label: '自动路由', value: 'auto' },
   { label: '随机使用', value: 'random' },
@@ -127,11 +138,12 @@ const form = reactive({
   enabled: true,
   routing_strategy: 'auto',
   auto_mode: 'priority',
-  currency: 'USD',
   input_price: null as number | null,
   output_price: null as number | null,
   cache_read_price: null as number | null,
   cache_write_price: null as number | null,
+  quota_limit_tokens: null as number | null,
+  quota_limit_cost: null as number | null,
   bindings: [] as BindingRow[],
 })
 
@@ -276,11 +288,18 @@ async function loadModel() {
     form.auto_mode = m.auto_mode || 'priority'
     const p = m.price
     if (p) {
-      form.currency = p.currency || 'USD'
       form.input_price = p.input_price ?? null
       form.output_price = p.output_price ?? null
       form.cache_read_price = p.cache_read_price ?? null
       form.cache_write_price = p.cache_write_price ?? null
+    }
+    const q = m.quota
+    if (q && q.id) {
+      form.quota_limit_tokens = q.limit_tokens ?? null
+      form.quota_limit_cost = q.limit_cost ?? null
+    } else {
+      form.quota_limit_tokens = null
+      form.quota_limit_cost = null
     }
     const bindings = m.bindings || []
     if (bindings.length === 0) {
@@ -311,10 +330,11 @@ function goBack() {
 
 function validate(): string | null {
   if (!form.name.trim()) return '请填写名称'
-  if (!form.currency) return '请选择币种'
   if (form.input_price == null) return '请填写输入价格'
   if (form.output_price == null) return '请填写输出价格'
   if (form.input_price < 0 || form.output_price < 0) return '价格不能为负'
+  if (form.quota_limit_tokens != null && form.quota_limit_tokens < 0) return 'Token 上限不能为负'
+  if (form.quota_limit_cost != null && form.quota_limit_cost < 0) return '费用上限不能为负'
   if (form.bindings.length === 0) return '至少需要一条上游绑定'
   for (let i = 0; i < form.bindings.length; i++) {
     const b = form.bindings[i]
@@ -329,7 +349,6 @@ function priceBody() {
   const body: any = {
     name: form.name,
     enabled: form.enabled,
-    currency: form.currency,
     input_price: form.input_price,
     output_price: form.output_price,
     routing_strategy: form.routing_strategy,
@@ -337,6 +356,11 @@ function priceBody() {
   }
   if (form.cache_read_price != null) body.cache_read_price = form.cache_read_price
   if (form.cache_write_price != null) body.cache_write_price = form.cache_write_price
+  body.quota = {
+    period: 'total',
+    limit_tokens: form.quota_limit_tokens ?? null,
+    limit_cost: form.quota_limit_cost ?? null,
+  }
   return body
 }
 
@@ -407,7 +431,11 @@ async function onSave() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadProviders(), loadModel()])
+  await Promise.all([
+    loadProviders(),
+    loadModel(),
+    loadCurrency().then((c) => { systemCurrency.value = c }),
+  ])
 })
 </script>
 

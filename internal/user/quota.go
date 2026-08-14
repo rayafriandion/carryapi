@@ -72,6 +72,86 @@ func (s *Store) DeleteQuota(id int64) error {
 	return err
 }
 
+// GetModelQuota 返回某模型的配额(scope="model")。未设置时返回零值 Quota(其 ID==0)。
+func (s *Store) GetModelQuota(modelID int64) (Quota, error) {
+	return s.getScopeQuota("model", modelID)
+}
+
+// GetKeyQuota 返回某 API Key 的配额(scope="key")。未设置时返回零值 Quota(其 ID==0)。
+func (s *Store) GetKeyQuota(keyID int64) (Quota, error) {
+	return s.getScopeQuota("key", keyID)
+}
+
+func (s *Store) getScopeQuota(scope string, scopeID int64) (Quota, error) {
+	quotas, err := s.GetQuotas(scope, scopeID)
+	if err != nil {
+		return Quota{}, err
+	}
+	if len(quotas) == 0 {
+		return Quota{}, nil
+	}
+	return quotas[0], nil
+}
+
+// SetModelQuota 设置/更新某模型的配额(upsert,scope="model")。
+// limitTokens/limitCost 为 nil 表示该维度不限制;两者均为 nil 时删除该配额记录。
+func (s *Store) SetModelQuota(modelID int64, period string, limitTokens *int64, limitCost *float64) (Quota, error) {
+	return s.setScopeQuota("model", modelID, period, limitTokens, limitCost)
+}
+
+// SetKeyQuota 设置/更新某 API Key 的配额(upsert,scope="key")。
+// limitTokens/limitCost 为 nil 表示该维度不限制;两者均为 nil 时删除该配额记录。
+func (s *Store) SetKeyQuota(keyID int64, period string, limitTokens *int64, limitCost *float64) (Quota, error) {
+	return s.setScopeQuota("key", keyID, period, limitTokens, limitCost)
+}
+
+func (s *Store) setScopeQuota(scope string, scopeID int64, period string, limitTokens *int64, limitCost *float64) (Quota, error) {
+	if period == "" {
+		period = "total"
+	}
+	existing, err := s.GetQuotas(scope, scopeID)
+	if err != nil {
+		return Quota{}, err
+	}
+	if len(existing) > 0 {
+		q := existing[0]
+		if limitTokens == nil && limitCost == nil {
+			if err := s.DeleteQuota(q.ID); err != nil {
+				return Quota{}, err
+			}
+			return Quota{}, nil
+		}
+		if _, err := s.db.Exec(
+			`UPDATE quotas SET period=?, limit_tokens=?, limit_cost=? WHERE id=?`,
+			period, limitTokens, limitCost, q.ID); err != nil {
+			return Quota{}, fmt.Errorf("set %s quota: %w", scope, err)
+		}
+		return s.GetQuota(q.ID)
+	}
+	if limitTokens == nil && limitCost == nil {
+		return Quota{}, nil
+	}
+	return s.SetQuota(Quota{
+		Scope: scope, ScopeID: scopeID, Period: period,
+		LimitTokens: limitTokens, LimitCost: limitCost,
+	})
+}
+
+// DeleteModelQuota 删除某模型的全部配额记录(模型删除时清理)。
+func (s *Store) DeleteModelQuota(modelID int64) error {
+	return s.deleteScopeQuota("model", modelID)
+}
+
+// DeleteKeyQuota 删除某 API Key 的全部配额记录(Key 删除时清理)。
+func (s *Store) DeleteKeyQuota(keyID int64) error {
+	return s.deleteScopeQuota("key", keyID)
+}
+
+func (s *Store) deleteScopeQuota(scope string, scopeID int64) error {
+	_, err := s.db.Exec(`DELETE FROM quotas WHERE scope=? AND scope_id=?`, scope, scopeID)
+	return err
+}
+
 func (s *Store) IncrementUsage(scope string, scopeID int64, tokens int64, cost float64) error {
 	// 原子累加;周期重置在子项目 4 调用时按 period 判断(此处先简单累加,周期重置留 TODO 由子项目4封装)
 	// 用事务保证原子

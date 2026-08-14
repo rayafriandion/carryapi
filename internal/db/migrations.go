@@ -153,6 +153,56 @@ ALTER TABLE request_logs ADD COLUMN ttft_ms INTEGER;
 CREATE INDEX IF NOT EXISTS idx_request_logs_provider_model
     ON request_logs(provider_id, upstream_model, created_at);
 `},
+	{5, `
+-- 供应商多 API Key 池:同一供应商可配置多个上游 key,
+-- 按优先级(priority)与用户亲和(cache 命中)选择,失败自动降级/冷却/删除。
+CREATE TABLE IF NOT EXISTS provider_api_keys (
+    id              INTEGER PRIMARY KEY,
+    provider_id     INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    key_enc         TEXT NOT NULL,
+    label           TEXT NOT NULL DEFAULT '',
+    priority        INTEGER NOT NULL DEFAULT 100,
+    base_priority   INTEGER NOT NULL DEFAULT 100,
+    status          TEXT NOT NULL DEFAULT 'active',
+    fail_count      INTEGER NOT NULL DEFAULT 0,
+    retry_after     TIMESTAMP,
+    last_used_at    TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at      TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_provider_api_keys_provider
+    ON provider_api_keys(provider_id, status, priority);
+
+-- 用户-上游 key 亲和:记录某用户最近使用过的上游 key,
+-- 保证同一用户的请求尽量落在同一上游 key 上以提高缓存命中率。
+CREATE TABLE IF NOT EXISTS provider_key_prefs (
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_id          INTEGER NOT NULL REFERENCES provider_api_keys(id) ON DELETE CASCADE,
+    last_used_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, key_id)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_key_prefs_key ON provider_key_prefs(key_id);
+
+-- 上游 key 生命周期审计日志(创建/降级/冷却/重试/恢复/删除),即"API key 调用日志"。
+CREATE TABLE IF NOT EXISTS provider_api_key_events (
+    id              INTEGER PRIMARY KEY,
+    key_id          INTEGER NOT NULL REFERENCES provider_api_keys(id) ON DELETE CASCADE,
+    provider_id     INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    event           TEXT NOT NULL,
+    detail          TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_provider_key_events_key ON provider_api_key_events(key_id, created_at);
+
+-- 存量单 key 迁移为池中第一个 key(幂等:跳过已迁移的 provider)。
+INSERT INTO provider_api_keys(provider_id, key_enc, label, priority, base_priority, status)
+SELECT id, api_key, '', 100, 100, 'active' FROM upstream_providers
+WHERE id NOT IN (SELECT DISTINCT provider_id FROM provider_api_keys);
+
+-- 请求日志记录实际命中的上游 key(用于 API key 调用日志)。
+ALTER TABLE request_logs ADD COLUMN provider_api_key_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_request_logs_provider_key ON request_logs(provider_api_key_id);
+`},
 }
 
 func Migrate(d *sql.DB) error {

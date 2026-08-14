@@ -350,11 +350,13 @@ type LogEntry struct {
 	CacheCreation int64
 	Cost          float64
 	DurationMs    int64
-	StatusCode    int
-	ErrorType     string
-	ErrorMessage  string
-	Stream        bool
-	CreatedAt     time.Time
+	StatusCode      int
+	ErrorType       string
+	ErrorMessage    string
+	Stream          bool
+	CreatedAt       time.Time
+	ProviderAPIKeyID int64  // 实际命中的上游 provider_api_keys.id(0 表示无)
+	ProviderKeyLabel string // 上游 key 标签(管理端查看)
 }
 
 // LogFilter 日志筛选条件。
@@ -363,11 +365,12 @@ type LogFilter struct {
 	End        time.Time
 	UserID     *int64 // nil=全部
 	Model      string
-	StatusCode *int
-	ErrorType  string
-	RequestID  string
-	Page       int // 1-based
-	PageSize   int // 默认 50,上限 200
+	StatusCode     *int
+	ErrorType      string
+	RequestID      string
+	ProviderKeyID  *int64 // 只看某上游 key 的调用记录
+	Page           int    // 1-based
+	PageSize       int    // 默认 50,上限 200
 }
 
 func (f *LogFilter) normalize() {
@@ -406,6 +409,10 @@ func (f *LogFilter) whereClause() (string, []any) {
 		clause += " AND rl.request_id = ?"
 		args = append(args, f.RequestID)
 	}
+	if f.ProviderKeyID != nil {
+		clause += " AND rl.provider_api_key_id = ?"
+		args = append(args, *f.ProviderKeyID)
+	}
 	return clause, args
 }
 
@@ -425,10 +432,11 @@ func QueryLogs(db *sql.DB, f LogFilter) (int64, []LogEntry, error) {
 		COALESCE(up.name,''), COALESCE(rl.upstream_model,''), COALESCE(rl.protocol_in,''), COALESCE(rl.protocol_out,''),
 		COALESCE(rl.input_tokens,0), COALESCE(rl.output_tokens,0), COALESCE(rl.cache_read_tokens,0), COALESCE(rl.cache_creation_tokens,0),
 		COALESCE(rl.cost,0), COALESCE(rl.duration_ms,0), rl.status_code, COALESCE(rl.error_type,''), COALESCE(rl.error_message,''),
-		COALESCE(rl.stream, 0), rl.created_at
+		COALESCE(rl.stream, 0), rl.created_at, COALESCE(rl.provider_api_key_id,0), COALESCE(pak.label,'')
 		FROM request_logs rl
 		LEFT JOIN users u ON rl.user_id = u.id
 		LEFT JOIN upstream_providers up ON rl.provider_id = up.id
+		LEFT JOIN provider_api_keys pak ON rl.provider_api_key_id = pak.id
 		WHERE ` + clause + ` ORDER BY rl.created_at DESC, rl.id DESC LIMIT ? OFFSET ?`
 	args = append(args, f.PageSize, offset)
 	rows, err := db.Query(query, args...)
@@ -445,7 +453,7 @@ func QueryLogs(db *sql.DB, f LogFilter) (int64, []LogEntry, error) {
 		if err := rows.Scan(&e.RequestID, &nu, &e.Email, &e.CustomModel, &e.ProviderName,
 			&e.UpstreamModel, &e.ProtocolIn, &e.ProtocolOut, &e.InputTokens, &e.OutputTokens,
 			&e.CacheRead, &e.CacheCreation, &cost, &e.DurationMs, &e.StatusCode, &e.ErrorType,
-			&e.ErrorMessage, &e.Stream, &e.CreatedAt); err != nil {
+			&e.ErrorMessage, &e.Stream, &e.CreatedAt, &e.ProviderAPIKeyID, &e.ProviderKeyLabel); err != nil {
 			return 0, nil, err
 		}
 		e.UserID = nu.Int64 // NULL -> 0
